@@ -1,0 +1,11 @@
+[package]
+name = "cabin"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+ansi-diff = "1.0.0"
+async-std = "1.10.0"
+cable = { path = "../cable.rs" }
+argmap = "1.1.1"
+
