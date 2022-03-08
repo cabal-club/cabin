@@ -1,6 +1,6 @@
 use async_std::{prelude::*,task,net,sync::{Arc,Mutex}};
 use std::collections::HashMap;
-use cable::{Cable,Store,ChannelOptions,Error};
+use cable::{Cable,Store,Error};
 use crate::ui::{UI,Addr,Channel,TermSize};
 
 pub struct App<S: Store> {
@@ -26,7 +26,6 @@ impl<S> App<S> where S: Store {
       },
       "/tcp.connect" => {
         if let Some(addr) = args.get(1).cloned() {
-          let cables = self.cables.clone();
           // todo: track connections
           let cable = Cable::new((self.storage_fn)(&addr));
           let ckey = ("tcp+c:".to_string() + &addr).as_bytes().to_vec();
@@ -72,7 +71,7 @@ impl<S> App<S> where S: Store {
     Ok(())
   }
   async fn post(&mut self, msg: &[u8]) -> Result<(),Error> {
-    if let (addr,channel,Some(cable)) = self.get_active().await {
+    if let (_addr,channel,Some(cable)) = self.get_active_cable().await {
       cable.post_text(&channel, msg).await?;
     } else {
       self.ui.lock().await.write_status(
@@ -81,13 +80,14 @@ impl<S> App<S> where S: Store {
     }
     Ok(())
   }
-  async fn get_active<'a>(&'a mut self) -> (Addr,Channel,Option<&'a mut Cable<S>>) {
-    let (addr,channel) = self.ui.lock().await.get_active();
-    if addr.is_empty() || channel == "!status".as_bytes().to_vec() {
-      (addr, channel, None)
+  async fn get_active_cable<'a>(&'a mut self) -> (Addr,Channel,Option<&'a mut Cable<S>>) {
+    let mut ui = self.ui.lock().await;
+    let w = ui.get_active_window();
+    if w.address.is_empty() || w.channel == "!status".as_bytes().to_vec() {
+      (w.address.clone(), w.channel.clone(), None)
     } else {
-      let cable = self.cables.get_mut(&addr);
-      (addr, channel, cable)
+      let cable = self.cables.get_mut(&w.address);
+      (w.address.clone(), w.channel.clone(), cable)
     }
   }
 }
