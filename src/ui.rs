@@ -7,6 +7,7 @@ pub struct UI {
   pub windows: Vec<Window>,
   pub diff: ansi_diff::Diff,
   pub size: TermSize,
+  tick: u64,
 }
 
 impl UI {
@@ -17,6 +18,7 @@ impl UI {
       size,
       active_window: 0,
       windows,
+      tick: 0,
     }
   }
   pub fn resize(&mut self, size: TermSize) {
@@ -58,11 +60,20 @@ impl UI {
     let w = self.windows.get(self.active_window).unwrap();
     let lines = w.lines.iter().map(|(time,line)| {
       format!["[{}] {}", timestamp(*time), line].to_string()
-    }).collect::<Vec<String>>().join("\n");
-    print!["{}", self.diff.update(&format![indoc::indoc![r#"
-      CABIN {}
-      {}
-    "#], to_hex(&w.address), lines])];
+    }).collect::<Vec<String>>();
+    print![
+      "{}\x1b[H{}\x1b[{}:0H",
+      if self.tick == 0 { "\x1bc\x1b[?25l" } else { "" }, // clear, turn off cursor
+      self.diff.update(&format![
+        indoc::indoc![r#"
+          CABIN {}
+          {}
+        "#],
+        to_hex(&w.address), lines.join("\n")
+      ]),
+      self.size.1-1,
+    ];
+    self.tick += 1;
   }
 }
 

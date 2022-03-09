@@ -1,6 +1,7 @@
 use cabin::{ui,ui::UI};
 use async_std::{io,task,sync::{Arc,Mutex}};
 use signal_hook::{iterator::{SignalsInfo,exfiltrator::WithOrigin},consts::SIGWINCH};
+use raw_tty::IntoRawMode;
 
 fn main() {
   task::block_on(async move {
@@ -27,10 +28,12 @@ fn main() {
       ui.update();
     }
 
+    let raw_stdin = std::io::stdin().into_raw_mode().unwrap();
     let stdin = io::stdin();
     let mut line = String::new();
     loop {
       stdin.read_line(&mut line).await.unwrap();
+      println!["line={}", line];
       let parts = line.split_whitespace().collect::<Vec<&str>>();
       match parts.get(0) {
         Some(&"/win") | Some(&"/w") => {
@@ -42,7 +45,9 @@ fn main() {
         Some(&"/quit") => break,
         _ => {},
       }
+      line.clear();
     }
+    print!["\x1bc"]; // reset
   })
 }
 
