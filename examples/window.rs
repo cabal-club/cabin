@@ -33,44 +33,54 @@ fn main() {
   task::block_on(async move {
     let mut stdin = std::io::stdin().into_raw_mode().unwrap();
     let mut buf = vec![0];
-    let mut ctrl = (None,None);
+    let mut seq = (None,None,None);
     loop {
       stdin.read_exact(&mut buf).unwrap();
       let mut ui = mui.lock().await;
 
-      match (buf[0],ctrl) {
-        (0x1b,(None,None)) => {
-          ctrl.0 = Some(0x1b);
+      match (buf[0],seq) {
+        (0x1b,(None,None,None)) => {
+          seq.0 = Some(0x1b);
           continue;
         },
-        (0x5b,(Some(0x1b),None)) => {
-          ctrl.1 = Some(0x5b);
+        (0x5b,(Some(0x1b),None,None)) => {
+          seq.1 = Some(0x5b);
           continue;
         },
-        (0x41,(Some(0x1b),Some(0x5b))) => { // up
-          ctrl = (None,None);
+        (0x41,(Some(0x1b),Some(0x5b),None)) => { // up
+          seq = (None,None,None);
           continue;
         },
-        (0x42,(Some(0x1b),Some(0x5b))) => { // down
-          ctrl = (None,None);
+        (0x42,(Some(0x1b),Some(0x5b),None)) => { // down
+          seq = (None,None,None);
           continue;
         },
-        (0x43,(Some(0x1b),Some(0x5b))) => { // right
-          ctrl = (None,None);
+        (0x43,(Some(0x1b),Some(0x5b),None)) => { // right
+          seq = (None,None,None);
           let c = (ui.cursor+1).min(ui.input.len());
           ui.set_cursor(c);
           ui.update();
           continue;
         },
-        (0x44,(Some(0x1b),Some(0x5b))) => { // left
-          ctrl = (None,None);
+        (0x44,(Some(0x1b),Some(0x5b),None)) => { // left
+          seq = (None,None,None);
           let c = ui.cursor.max(1)-1;
           ui.set_cursor(c);
           ui.update();
           continue;
         },
+        (0x33,(Some(0x1b),Some(0x5b),None)) => {
+          seq.2 = Some(0x33);
+          continue;
+        },
+        (0x7e,(Some(0x1b),Some(0x5b),Some(0x33))) => { // delete
+          seq = (None,None,None);
+          ui.remove_right(1);
+          ui.update();
+          continue;
+        },
         _ => {
-          ctrl = (None,None);
+          seq = (None,None,None);
         },
       }
 
@@ -90,6 +100,9 @@ fn main() {
         break;
       } else if buf[0] == 0x7f { // backspace
         ui.remove_left(1);
+        ui.update();
+      } else if buf[0] == 0x7e { // delete
+        ui.remove_right(1);
         ui.update();
       } else if buf[0] >= 0x20 {
         ui.put(&buf);

@@ -107,6 +107,11 @@ impl UI {
     self.input = self.input[0..c.max(n)-n].to_string() + &self.input[c.min(len)..];
     self.cursor = self.cursor.max(n) - n;
   }
+  pub fn remove_right(&mut self, n: usize) {
+    let len = self.input.len();
+    let c = self.cursor;
+    self.input = self.input[0..c].to_string() + &self.input[(c+n).min(len)..];
+  }
   pub fn set_cursor(&mut self, cursor: usize) {
     self.cursor = cursor;
   }
