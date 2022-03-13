@@ -9,6 +9,7 @@ pub struct UI {
   pub diff: ansi_diff::Diff,
   pub size: TermSize,
   pub input: String,
+  pub cursor: usize,
   pub stdout: std::io::Stdout,
   tick: u64,
 }
@@ -22,6 +23,7 @@ impl UI {
       active_window: 0,
       windows,
       input: String::default(),
+      cursor: 0,
       stdout: std::io::stdout(),
       tick: 0,
     }
@@ -69,6 +71,12 @@ impl UI {
     for _ in lines.len()..(self.size.1 as usize)-2 {
       lines.push(String::default());
     }
+    let input = {
+      let c = self.cursor.min(self.input.len());
+      let n = (c+1).min(self.input.len());
+      let s = if n > c { &self.input[c..n] } else { " " };
+      self.input[0..c].to_string() + "\x1b[7m" + s + "\x1b[0m" + &self.input[n..]
+    };
     write![
       self.stdout,
       "{}{}",
@@ -77,7 +85,7 @@ impl UI {
         "CABIN {}\n{}\n> {}",
         to_hex(&w.address),
         lines.join("\n"),
-        &self.input,
+        &input,
       ]).split("\n").collect::<Vec<&str>>().join("\r\n"),
     ];
     self.stdout.flush();
@@ -85,6 +93,22 @@ impl UI {
   }
   pub fn set_input(&mut self, input: &str) {
     self.input = input.to_string();
+    self.cursor = self.cursor.min(self.input.len());
+  }
+  pub fn put(&mut self, buf: &[u8]) {
+    let c = self.cursor.min(self.input.len());
+    let s = String::from_utf8(buf.to_vec()).unwrap();
+    self.input = self.input[0..c].to_string() + &s + &self.input[c..];
+    self.cursor = (self.cursor+1).min(self.input.len());
+  }
+  pub fn remove_left(&mut self, n: usize) {
+    let len = self.input.len();
+    let c = self.cursor;
+    self.input = self.input[0..c.max(n)-n].to_string() + &self.input[c.min(len)..];
+    self.cursor = self.cursor.max(n) - n;
+  }
+  pub fn set_cursor(&mut self, cursor: usize) {
+    self.cursor = cursor;
   }
 }
 

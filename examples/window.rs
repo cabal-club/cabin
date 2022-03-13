@@ -1,5 +1,5 @@
 use cabin::{ui,ui::UI};
-use async_std::{io,task,sync::{Arc,Mutex}};
+use async_std::{task,sync::{Arc,Mutex}};
 use signal_hook::{iterator::{SignalsInfo,exfiltrator::WithOrigin},consts::SIGWINCH};
 use raw_tty::IntoRawMode;
 use std::io::Read;
@@ -33,12 +33,49 @@ fn main() {
   task::block_on(async move {
     let mut stdin = std::io::stdin().into_raw_mode().unwrap();
     let mut buf = vec![0];
-    let mut line = String::default();
+    let mut ctrl = (None,None);
     loop {
       stdin.read_exact(&mut buf).unwrap();
+      let mut ui = mui.lock().await;
+
+      match (buf[0],ctrl) {
+        (0x1b,(None,None)) => {
+          ctrl.0 = Some(0x1b);
+          continue;
+        },
+        (0x5b,(Some(0x1b),None)) => {
+          ctrl.1 = Some(0x5b);
+          continue;
+        },
+        (0x41,(Some(0x1b),Some(0x5b))) => { // up
+          ctrl = (None,None);
+          continue;
+        },
+        (0x42,(Some(0x1b),Some(0x5b))) => { // down
+          ctrl = (None,None);
+          continue;
+        },
+        (0x43,(Some(0x1b),Some(0x5b))) => { // right
+          ctrl = (None,None);
+          let c = (ui.cursor+1).min(ui.input.len());
+          ui.set_cursor(c);
+          ui.update();
+          continue;
+        },
+        (0x44,(Some(0x1b),Some(0x5b))) => { // left
+          ctrl = (None,None);
+          let c = ui.cursor.max(1)-1;
+          ui.set_cursor(c);
+          ui.update();
+          continue;
+        },
+        _ => {
+          ctrl = (None,None);
+        },
+      }
+
       if buf[0] == 0x0d {
-        let parts = line.split_whitespace().collect::<Vec<&str>>();
-        let mut ui = mui.lock().await;
+        let parts = ui.input.split_whitespace().collect::<Vec<&str>>();
         match parts.get(0) {
           Some(&"/win") | Some(&"/w") => {
             let i: usize = parts.get(1).unwrap().parse().unwrap();
@@ -49,19 +86,13 @@ fn main() {
         }
         ui.set_input("");
         ui.update();
-        line.clear();
-      } else if buf[0] == 0x03 {
+      } else if buf[0] == 0x03 { // ctrl+c
         break;
       } else if buf[0] == 0x7f { // backspace
-        if line.is_empty() { continue }
-        let mut ui = mui.lock().await;
-        line = line[..line.len()-1].to_string();
-        ui.set_input(&line);
+        ui.remove_left(1);
         ui.update();
-      } else if buf[0] >= 32 {
-        line += &String::from_utf8(buf.clone()).unwrap();
-        let mut ui = mui.lock().await;
-        ui.set_input(&line);
+      } else if buf[0] >= 0x20 {
+        ui.put(&buf);
         ui.update();
       }
     }
