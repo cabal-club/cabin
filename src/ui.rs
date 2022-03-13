@@ -1,12 +1,15 @@
 pub type Channel = Vec<u8>;
 pub type Addr = Vec<u8>;
 pub type TermSize = (u32,u32);
+use std::io::Write;
 
 pub struct UI {
   pub active_window: usize,
   pub windows: Vec<Window>,
   pub diff: ansi_diff::Diff,
   pub size: TermSize,
+  pub input: String,
+  pub stdout: std::io::Stdout,
   tick: u64,
 }
 
@@ -18,6 +21,8 @@ impl UI {
       size,
       active_window: 0,
       windows,
+      input: String::default(),
+      stdout: std::io::stdout(),
       tick: 0,
     }
   }
@@ -58,22 +63,28 @@ impl UI {
   }
   pub fn update(&mut self) {
     let w = self.windows.get(self.active_window).unwrap();
-    let lines = w.lines.iter().map(|(time,line)| {
+    let mut lines = w.lines.iter().map(|(time,line)| {
       format!["[{}] {}", timestamp(*time), line].to_string()
     }).collect::<Vec<String>>();
-    print![
-      "{}\x1b[H{}\x1b[{}:0H",
+    for _ in lines.len()..(self.size.1 as usize)-2 {
+      lines.push(String::default());
+    }
+    write![
+      self.stdout,
+      "{}{}",
       if self.tick == 0 { "\x1bc\x1b[?25l" } else { "" }, // clear, turn off cursor
       self.diff.update(&format![
-        indoc::indoc![r#"
-          CABIN {}
-          {}
-        "#],
-        to_hex(&w.address), lines.join("\n")
-      ]),
-      self.size.1-1,
+        "CABIN {}\n{}\n> {}",
+        to_hex(&w.address),
+        lines.join("\n"),
+        &self.input,
+      ]).split("\n").collect::<Vec<&str>>().join("\r\n"),
     ];
+    self.stdout.flush();
     self.tick += 1;
+  }
+  pub fn set_input(&mut self, input: &str) {
+    self.input = input.to_string();
   }
 }
 
