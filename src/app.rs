@@ -2,11 +2,13 @@ use async_std::{prelude::*,task,net,sync::{Arc,Mutex}};
 use std::collections::HashMap;
 use cable::{Cable,Store,Error};
 use crate::ui::{UI,Addr,Channel,TermSize};
+use std::io::Read;
 
 pub struct App<S: Store> {
   cables: HashMap<Addr,Cable<S>>,
   storage_fn: Box<dyn Fn (&str) -> Box<S>>,
   pub ui: Arc<Mutex<UI>>,
+  exit: bool,
 }
 
 impl<S> App<S> where S: Store {
@@ -15,14 +17,48 @@ impl<S> App<S> where S: Store {
       cables: HashMap::new(),
       storage_fn,
       ui: Arc::new(Mutex::new(UI::new(size))),
+      exit: false,
     }
+  }
+  pub async fn run(&mut self, mut reader: Box<dyn Read>) -> Result<(),Error> {
+    self.ui.lock().await.update();
+    let mut buf = vec![0];
+    while !self.exit {
+      reader.read_exact(&mut buf).unwrap();
+      let lines = {
+        let mut ui = self.ui.lock().await;
+        ui.input.putc(buf[0]);
+        ui.update();
+        let mut lines = vec![];
+        while let Some(line) = ui.input.get_next_line() {
+          lines.push(line);
+        }
+        lines
+      };
+      for line in lines {
+        self.handle(&line).await?;
+        if self.exit { break }
+      }
+    }
+    Ok(())
   }
   pub async fn handle(&mut self, line: &str) -> Result<(),Error> {
     let args = line.split_whitespace().map(|s| s.to_string()).collect::<Vec<String>>();
     if args.is_empty() { return Ok(()) }
     match args.get(0).unwrap().as_str() {
       "/help" => {
-        self.ui.lock().await.write_status("available commands: /tcp.connect, /tcp.listen");
+        let mut ui = self.ui.lock().await;
+        ui.write_status("available commands: /tcp.connect, /tcp.listen");
+        ui.update();
+      },
+      "/quit" | "/exit" | "/q" => {
+        self.exit = true;
+      },
+      "/win" | "/w" => {
+        let i: usize = args.get(1).unwrap().parse().unwrap();
+        let mut ui = self.ui.lock().await;
+        ui.set_active_index(i);
+        ui.update();
       },
       "/tcp.connect" => {
         if let Some(addr) = args.get(1).cloned() {
@@ -36,7 +72,9 @@ impl<S> App<S> where S: Store {
             let r: Result<(),Error> = Ok(()); r
           });
         } else {
-          self.ui.lock().await.write_status("usage: /tcp.connect HOST:PORT");
+          let mut ui = self.ui.lock().await;
+          ui.write_status("usage: /tcp.connect HOST:PORT");
+          ui.update();
         }
       },
       "/tcp.listen" => {
@@ -57,12 +95,16 @@ impl<S> App<S> where S: Store {
             let r: Result<(),Error> = Ok(()); r
           });
         } else {
-          self.ui.lock().await.write_status("usage: /tcp.listen (ADDR:)PORT");
+          let mut ui = self.ui.lock().await;
+          ui.write_status("usage: /tcp.listen (ADDR:)PORT");
+          ui.update();
         }
       },
       x => {
         if x.starts_with("/") {
-          self.ui.lock().await.write_status(&format!["no such command: {}", x]);
+          let mut ui = self.ui.lock().await;
+          ui.write_status(&format!["no such command: {}", x]);
+          ui.update();
         } else {
           self.post(&line.trim_end().as_bytes()).await?;
         }
@@ -74,9 +116,11 @@ impl<S> App<S> where S: Store {
     if let (_addr,channel,Some(cable)) = self.get_active_cable().await {
       cable.post_text(&channel, msg).await?;
     } else {
-      self.ui.lock().await.write_status(
+      let mut ui = self.ui.lock().await;
+      ui.write_status(
         "can't post text in status channel. see /help for command list"
       );
+      ui.update();
     }
     Ok(())
   }
