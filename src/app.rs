@@ -40,6 +40,7 @@ impl<S> App<S> where S: Store {
         if self.exit { break }
       }
     }
+    self.ui.lock().await.finish();
     Ok(())
   }
   pub async fn handle(&mut self, line: &str) -> Result<(),Error> {

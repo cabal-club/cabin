@@ -90,6 +90,9 @@ impl UI {
     self.stdout.flush().unwrap();
     self.tick += 1;
   }
+  pub fn finish(&mut self) {
+    write![self.stdout, "\x1bc"];
+  }
 }
 
 fn timestamp(time: u64) -> String {
