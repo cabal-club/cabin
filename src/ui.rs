@@ -2,14 +2,14 @@ pub type Channel = Vec<u8>;
 pub type Addr = Vec<u8>;
 pub type TermSize = (u32,u32);
 use std::io::Write;
+use crate::input::Input;
 
 pub struct UI {
   pub active_window: usize,
   pub windows: Vec<Window>,
   pub diff: ansi_diff::Diff,
   pub size: TermSize,
-  pub input: String,
-  pub cursor: usize,
+  pub input: Input,
   pub stdout: std::io::Stdout,
   tick: u64,
 }
@@ -22,8 +22,7 @@ impl UI {
       size,
       active_window: 0,
       windows,
-      input: String::default(),
-      cursor: 0,
+      input: Input::default(),
       stdout: std::io::stdout(),
       tick: 0,
     }
@@ -72,10 +71,10 @@ impl UI {
       lines.push(String::default());
     }
     let input = {
-      let c = self.cursor.min(self.input.len());
-      let n = (c+1).min(self.input.len());
-      let s = if n > c { &self.input[c..n] } else { " " };
-      self.input[0..c].to_string() + "\x1b[7m" + s + "\x1b[0m" + &self.input[n..]
+      let c = self.input.cursor.min(self.input.value.len());
+      let n = (c+1).min(self.input.value.len());
+      let s = if n > c { &self.input.value[c..n] } else { " " };
+      self.input.value[0..c].to_string() + "\x1b[7m" + s + "\x1b[0m" + &self.input.value[n..]
     };
     write![
       self.stdout,
@@ -87,33 +86,9 @@ impl UI {
         lines.join("\n"),
         &input,
       ]).split("\n").collect::<Vec<&str>>().join("\r\n"),
-    ];
-    self.stdout.flush();
+    ].unwrap();
+    self.stdout.flush().unwrap();
     self.tick += 1;
-  }
-  pub fn set_input(&mut self, input: &str) {
-    self.input = input.to_string();
-    self.cursor = self.cursor.min(self.input.len());
-  }
-  pub fn put(&mut self, buf: &[u8]) {
-    let c = self.cursor.min(self.input.len());
-    let s = String::from_utf8(buf.to_vec()).unwrap();
-    self.input = self.input[0..c].to_string() + &s + &self.input[c..];
-    self.cursor = (self.cursor+1).min(self.input.len());
-  }
-  pub fn remove_left(&mut self, n: usize) {
-    let len = self.input.len();
-    let c = self.cursor;
-    self.input = self.input[0..c.max(n)-n].to_string() + &self.input[c.min(len)..];
-    self.cursor = self.cursor.max(n) - n;
-  }
-  pub fn remove_right(&mut self, n: usize) {
-    let len = self.input.len();
-    let c = self.cursor;
-    self.input = self.input[0..c].to_string() + &self.input[(c+n).min(len)..];
-  }
-  pub fn set_cursor(&mut self, cursor: usize) {
-    self.cursor = cursor;
   }
 }
 
