@@ -3,11 +3,16 @@ use std::collections::{HashMap,HashSet};
 use cable::{Cable,Store,Error};
 use crate::ui::{UI,Addr,Channel,TermSize};
 use std::io::Read;
-type ConnectionAddr = Vec<u8>;
+
+#[derive(Debug,Clone,Hash,Eq,PartialEq)]
+enum Connection {
+  Connected(String),
+  Listening(String),
+}
 
 pub struct App<S: Store> {
   cables: HashMap<Addr,Cable<S>>,
-  connections: HashSet<ConnectionAddr>,
+  connections: HashSet<Connection>,
   storage_fn: Box<dyn Fn (&str) -> Box<S>>,
   active_addr: Option<Addr>,
   pub ui: Arc<Mutex<UI>>,
@@ -59,7 +64,7 @@ impl<S> App<S> where S: Store {
     match args.get(0).unwrap().as_str() {
       "/help" => {
         let mut ui = self.ui.lock().await;
-        ui.write_status("available commands: /tcp.connect, /tcp.listen");
+        ui.write_status("available commands: TODO");
         ui.update();
       },
       "/quit" | "/exit" | "/q" => {
@@ -86,38 +91,67 @@ impl<S> App<S> where S: Store {
           (Some("list"),_) => {
             let mut ui = self.ui.lock().await;
             for addr in self.cables.keys() {
-              ui.write_status(&String::from_utf8(addr.to_vec()).unwrap());
+              let star = if self.active_addr.as_ref().map(|x| x == addr).unwrap_or(false) { "*" } else { "" };
+              ui.write_status(&(String::from_utf8(addr.to_vec()).unwrap() + star));
             }
-            ui.write_status("{ end of cabal list }");
+            if self.cables.is_empty() {
+              ui.write_status("{ no cabals in list }");
+            }
             ui.update();
           },
           _ => {},
         }
       },
-      "/tcp.connect" => {
-        if let Some(addr) = args.get(1).cloned() {
-          // todo: track connections
-          let cable = Cable::new((self.storage_fn)(&addr));
-          let ckey = ("tcp+c:".to_string() + &addr).as_bytes().to_vec();
-          self.cables.insert(ckey, cable.clone());
+      "/connections" => {
+        let mut ui = self.ui.lock().await;
+        for c in self.connections.iter() {
+          ui.write_status(&match c {
+            Connection::Connected(addr) => format!["connected to {}", addr],
+            Connection::Listening(addr) => format!["listening on {}", addr],
+          });
+        }
+        if self.connections.is_empty() {
+          ui.write_status("{ no connections in list }");
+        }
+        ui.update();
+      },
+      "/connect" => {
+        if self.active_addr.is_none() {
+          self.write_status(r#"no active cabal to bind this connection. use "/cabal add" first"#);
+        } else if let Some(tcp_addr) = args.get(1).cloned() {
+          self.write_status("connect 1");
+          let cable = self.get_active_cable().await.unwrap().clone();
+          self.write_status("connect 2");
+          self.connections.insert(Connection::Connected(tcp_addr.clone()));
+          let mui = self.ui.clone();
           task::spawn(async move {
-            let stream = net::TcpStream::connect(addr).await?;
+            let stream = net::TcpStream::connect(tcp_addr.clone()).await?;
             cable.listen(stream).await?;
+            let mut ui = mui.lock().await;
+            ui.write_status(&format!["connected to {}", tcp_addr]);
+            ui.update();
             let r: Result<(),Error> = Ok(()); r
           });
         } else {
           let mut ui = self.ui.lock().await;
-          ui.write_status("usage: /tcp.connect HOST:PORT");
+          ui.write_status("usage: /connect HOST:PORT");
           ui.update();
         }
       },
-      "/tcp.listen" => {
-        if let Some(addr) = args.get(1).cloned() {
-          let cable = Cable::new((self.storage_fn)(&addr));
-          let ckey = ("tcp+l:".to_string() + &addr).as_bytes().to_vec();
-          self.cables.insert(ckey, cable.clone());
+      "/listen" => {
+        if self.active_addr.is_none() {
+          self.write_status(r#"no active cabal to bind this connection. use "/cabal add" first"#);
+        } else if let Some(tcp_addr) = args.get(1).cloned() {
+          let cable = self.get_active_cable().await.unwrap().clone();
+          self.connections.insert(Connection::Listening(tcp_addr.clone()));
+          let mui = self.ui.clone();
           task::spawn(async move {
-            let listener = net::TcpListener::bind(addr).await?;
+            let listener = net::TcpListener::bind(tcp_addr.clone()).await?;
+            {
+              let mut ui = mui.lock().await;
+              ui.write_status(&format!["listening on {}", tcp_addr]);
+              ui.update();
+            }
             let mut incoming = listener.incoming();
             while let Some(rstream) = incoming.next().await {
               let stream = rstream.unwrap();
@@ -130,7 +164,7 @@ impl<S> App<S> where S: Store {
           });
         } else {
           let mut ui = self.ui.lock().await;
-          ui.write_status("usage: /tcp.listen (ADDR:)PORT");
+          ui.write_status("usage: /listen (ADDR:)PORT");
           ui.update();
         }
       },
@@ -154,30 +188,27 @@ impl<S> App<S> where S: Store {
     self.active_addr = Some(addr.clone());
   }
   async fn post(&mut self, msg: &[u8]) -> Result<(),Error> {
-    if let (_addr,channel,Some(cable)) = self.get_active_cable().await {
-      cable.post_text(&channel, msg).await?;
-    } else {
-      let mut ui = self.ui.lock().await;
+    let mut ui = self.ui.lock().await;
+    let w = ui.get_active_window();
+    if w.channel == "!status".as_bytes().to_vec() {
       ui.write_status(
         "can't post text in status channel. see /help for command list"
       );
       ui.update();
+    } else {
+      let cable = self.cables.get_mut(&w.address).unwrap();
+      cable.post_text(&w.channel, msg).await?;
     }
     Ok(())
   }
-  async fn get_active_cable<'a>(&'a mut self) -> (Addr,Channel,Option<&'a mut Cable<S>>) {
+  async fn get_active_cable<'a>(&'a mut self) -> Option<&'a mut Cable<S>> {
     let mut ui = self.ui.lock().await;
-    let w = ui.get_active_window();
-    if w.address.is_empty() || w.channel == "!status".as_bytes().to_vec() {
-      (w.address.clone(), w.channel.clone(), None)
-    } else {
-      let cable = self.cables.get_mut(&w.address);
-      (w.address.clone(), w.channel.clone(), cable)
-    }
+    self.active_addr.as_ref().and_then(|addr| self.cables.get_mut(addr))
   }
   async fn write_status(&self, msg: &str) {
     let mut ui = self.ui.lock().await;
     ui.write_status(msg);
+    ui.update();
   }
   async fn update(&self) {
     self.ui.lock().await.update();
