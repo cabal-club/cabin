@@ -117,19 +117,21 @@ impl<S> App<S> where S: Store {
       },
       "/connect" => {
         if self.active_addr.is_none() {
-          self.write_status(r#"no active cabal to bind this connection. use "/cabal add" first"#);
+          self.write_status(
+            r#"no active cabal to bind this connection. use "/cabal add" first"#
+          ).await;
         } else if let Some(tcp_addr) = args.get(1).cloned() {
-          self.write_status("connect 1");
           let cable = self.get_active_cable().await.unwrap().clone();
-          self.write_status("connect 2");
           self.connections.insert(Connection::Connected(tcp_addr.clone()));
           let mui = self.ui.clone();
           task::spawn(async move {
             let stream = net::TcpStream::connect(tcp_addr.clone()).await?;
+            {
+              let mut ui = mui.lock().await;
+              ui.write_status(&format!["connected to {}", tcp_addr]);
+              ui.update();
+            }
             cable.listen(stream).await?;
-            let mut ui = mui.lock().await;
-            ui.write_status(&format!["connected to {}", tcp_addr]);
-            ui.update();
             let r: Result<(),Error> = Ok(()); r
           });
         } else {
@@ -140,8 +142,13 @@ impl<S> App<S> where S: Store {
       },
       "/listen" => {
         if self.active_addr.is_none() {
-          self.write_status(r#"no active cabal to bind this connection. use "/cabal add" first"#);
-        } else if let Some(tcp_addr) = args.get(1).cloned() {
+          self.write_status(
+            r#"no active cabal to bind this connection. use "/cabal add" first"#
+          ).await;
+        } else if let Some(mut tcp_addr) = args.get(1).cloned() {
+          if !tcp_addr.contains(":") {
+            tcp_addr = format!["0.0.0.0:{}", tcp_addr];
+          }
           let cable = self.get_active_cable().await.unwrap().clone();
           self.connections.insert(Connection::Listening(tcp_addr.clone()));
           let mui = self.ui.clone();
