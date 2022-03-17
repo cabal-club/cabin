@@ -76,10 +76,26 @@ impl<S> App<S> where S: Store {
         ui.set_active_index(i);
         ui.update();
       },
+      "/join" | "/j" => {
+        let mut ui = self.ui.lock().await;
+        if let Some(address) = &self.active_addr {
+          if let Some(channel) = args.get(0) {
+            ui.add_window(address.clone(), channel.as_bytes().to_vec());
+          } else {
+            ui.write_status("usage: /join CHANNEL");
+          }
+        } else {
+          ui.write_status(&format!["{}{}",
+            "cannot join channel with no active cabal set.",
+            " add a cabal with \"/cabal add\" first",
+          ]);
+        }
+        ui.update();
+      },
       "/cabal" => {
         match (args.get(1).map(|x| x.as_str()), args.get(2)) {
           (Some("add"),Some(s_addr)) => {
-            let addr = s_addr.as_bytes().to_vec();
+            let addr = from_hex(s_addr);
             self.add_cable(&addr);
             self.write_status(&format!["added cabal: {}", s_addr]).await;
             if self.active_addr.is_none() {
@@ -209,7 +225,6 @@ impl<S> App<S> where S: Store {
     Ok(())
   }
   async fn get_active_cable<'a>(&'a mut self) -> Option<&'a mut Cable<S>> {
-    let mut ui = self.ui.lock().await;
     self.active_addr.as_ref().and_then(|addr| self.cables.get_mut(addr))
   }
   async fn write_status(&self, msg: &str) {
@@ -220,4 +235,8 @@ impl<S> App<S> where S: Store {
   async fn update(&self) {
     self.ui.lock().await.update();
   }
+}
+
+fn from_hex(s: &str) -> Vec<u8> {
+  s.chars().map(|c| u8::from_str_radix(&c.to_string(), 16).unwrap()).collect()
 }
