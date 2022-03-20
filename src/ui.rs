@@ -3,6 +3,7 @@ pub type Addr = Vec<u8>;
 pub type TermSize = (u32,u32);
 use std::io::Write;
 use crate::input::Input;
+use std::collections::BTreeSet;
 
 pub struct UI {
   pub active_window: usize,
@@ -52,6 +53,12 @@ impl UI {
     self.windows.push(Window::new(address, channel));
     self.windows.len() - 1
   }
+  pub fn get_window<'a>(&'a mut self, address: &Addr, channel: &Channel) -> Option<&'a mut Window> {
+    for w in self.windows.iter_mut() {
+      if &w.address == address && &w.channel == channel { return Some(w) }
+    }
+    return None;
+  }
   pub fn move_window(&mut self, src: usize, dst: usize) {
     let w = self.windows.remove(src);
     self.windows.insert(dst, w);
@@ -64,7 +71,7 @@ impl UI {
   }
   pub fn update(&mut self) {
     let w = self.windows.get(self.active_window).unwrap();
-    let mut lines = w.lines.iter().map(|(time,line)| {
+    let mut lines = w.lines.iter().map(|(time,_,line)| {
       format!["[{}] {}", timestamp(*time), line].to_string()
     }).collect::<Vec<String>>();
     for _ in lines.len()..(self.size.1 as usize)-2 {
@@ -91,7 +98,7 @@ impl UI {
     self.tick += 1;
   }
   pub fn finish(&mut self) {
-    write![self.stdout, "\x1bc"];
+    write![self.stdout, "\x1bc"].unwrap();
   }
 }
 
@@ -104,7 +111,8 @@ pub struct Window {
   pub channel: Channel,
   pub time_end: u64,
   pub limit: usize,
-  pub lines: Vec<(u64,String)>,
+  pub lines: BTreeSet<(u64,u64,String)>,
+  line_index: u64,
 }
 
 impl Window {
@@ -115,11 +123,17 @@ impl Window {
       //time_start: now() - 15*60,
       time_end: 0,
       limit: 50,
-      lines: vec![],
+      lines: BTreeSet::default(),
+      line_index: 0,
     }
   }
   pub fn write(&mut self, msg: &str) {
-    self.lines.push((now(), msg.to_string()));
+    self.insert(now(), msg);
+  }
+  pub fn insert(&mut self, timestamp: u64, text: &str) {
+    let index = self.line_index;
+    self.line_index += 1;
+    self.lines.insert((timestamp,index,text.to_string()));
   }
 }
 
