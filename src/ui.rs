@@ -2,7 +2,7 @@ pub type Channel = Vec<u8>;
 pub type Addr = Vec<u8>;
 pub type TermSize = (u32,u32);
 use std::io::Write;
-use crate::input::Input;
+use crate::{input::Input,hex};
 use std::collections::BTreeSet;
 
 pub struct UI {
@@ -89,7 +89,7 @@ impl UI {
       if self.tick == 0 { "\x1bc\x1b[?25l" } else { "" }, // clear, turn off cursor
       self.diff.update(&format![
         "CABIN {}\n{}\n> {}",
-        to_hex(&w.address),
+        hex::to(&w.address),
         lines.join("\n"),
         &input,
       ]).split("\n").collect::<Vec<&str>>().join("\r\n"),
@@ -139,8 +139,4 @@ impl Window {
 
 fn now() -> u64 {
   std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-}
-
-fn to_hex(addr: &Addr) -> String {
-  addr.iter().map(|byte| format!["{:x}", byte]).collect::<Vec<String>>().join("")
 }
