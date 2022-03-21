@@ -1,8 +1,9 @@
 use async_std::{prelude::*,task,net,sync::{Arc,Mutex}};
 use std::collections::{HashMap,HashSet};
 use cable::{Cable,Error,Store,ChannelOptions,PostBody};
-use crate::{ui::{UI,Addr,TermSize},hex};
+use crate::{ui::{UI,Addr,TermSize},input::InputEvent,hex};
 use std::io::Read;
+use terminal_keycode::KeyCode;
 
 #[derive(Debug,Clone,Hash,Eq,PartialEq)]
 enum Connection {
@@ -38,8 +39,15 @@ impl<S> App<S> where S: Store {
         ui.input.putc(buf[0]);
         ui.update();
         let mut lines = vec![];
-        while let Some(line) = ui.input.get_next_line() {
-          lines.push(line);
+        while let Some(event) = ui.input.next() {
+          match event {
+            InputEvent::KeyCode(KeyCode::PageUp) => {},
+            InputEvent::KeyCode(KeyCode::PageDown) => {},
+            InputEvent::KeyCode(_) => {},
+            InputEvent::Line(line) => {
+              lines.push(line);
+            },
+          }
         }
         lines
       };

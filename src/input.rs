@@ -1,11 +1,17 @@
 use std::collections::VecDeque;
+use terminal_keycode::{Decoder,KeyCode};
 
 pub struct Input {
   pub history: Vec<String>,
   pub value: String,
   pub cursor: usize,
-  seq: (Option<u8>,Option<u8>,Option<u8>),
-  queue: VecDeque<String>,
+  decoder: Decoder,
+  queue: VecDeque<InputEvent>,
+}
+
+pub enum InputEvent {
+  Line(String),
+  KeyCode(KeyCode),
 }
 
 impl Default for Input {
@@ -14,76 +20,53 @@ impl Default for Input {
       history: vec![],
       value: String::default(),
       cursor: 0,
-      seq: (None,None,None),
+      decoder: Decoder::default(),
       queue: VecDeque::new(),
     }
   }
 }
 
 impl Input {
-  fn put_seq(&mut self, b: u8) -> bool {
-    match (b, &self.seq) {
-      (0x1b,(None,None,None)) => {
-        self.seq.0 = Some(0x1b);
-        true
-      },
-      (0x5b,(Some(0x1b),None,None)) => {
-        self.seq.1 = Some(0x5b);
-        true
-      },
-      (0x41,(Some(0x1b),Some(0x5b),None)) => { // up
-        self.seq = (None,None,None);
-        true
-      },
-      (0x42,(Some(0x1b),Some(0x5b),None)) => { // down
-        self.seq = (None,None,None);
-        true
-      },
-      (0x43,(Some(0x1b),Some(0x5b),None)) => { // right
-        self.seq = (None,None,None);
-        self.cursor = (self.cursor+1).min(self.value.len());
-        true
-      },
-      (0x44,(Some(0x1b),Some(0x5b),None)) => { // left
-        self.seq = (None,None,None);
-        self.cursor = self.cursor.max(1)-1;
-        true
-      },
-      (0x33,(Some(0x1b),Some(0x5b),None)) => {
-        self.seq.2 = Some(0x33);
-        true
-      },
-      (0x7e,(Some(0x1b),Some(0x5b),Some(0x33))) => { // delete
-        self.seq = (None,None,None);
-        true
-      },
-      _ => {
-        self.seq = (None,None,None);
-        false
-      },
-    }
-  }
   pub fn putc(&mut self, b: u8) {
-    if self.put_seq(b) { return }
-    if b == 0x0d {
-      self.queue.push_back(self.value.clone());
-      self.value = String::default();
-    } else if b == 0x03 { // ctrl+c
-      // ...
-    } else if b == 0x7f { // backspace
-      self.remove_left(1);
-    } else if b == 0x7e { // delete
-      self.remove_right(1);
-    } else if b >= 0x20 {
-      self.put_bytes(&vec![b]);
+    for keycode in self.decoder.write(b) {
+      match keycode {
+        KeyCode::Enter | KeyCode::Linefeed => {
+          self.queue.push_back(InputEvent::Line(self.value.clone()));
+          self.value = String::default();
+        },
+        KeyCode::Backspace | KeyCode::CtrlH => {
+          self.remove_left(1);
+        },
+        KeyCode::Delete => {
+          self.remove_right(1);
+        },
+        KeyCode::ArrowLeft => {
+          self.cursor = self.cursor.max(1)-1;
+        },
+        KeyCode::ArrowRight => {
+          self.cursor = (self.cursor+1).min(self.value.len());
+        },
+        KeyCode::Home => {
+          self.cursor = 0;
+        },
+        KeyCode::End => {
+          self.cursor = self.value.len();
+        },
+        code => {
+          if let Some(c) = code.printable() {
+            self.put_str(&c.to_string());
+          } else {
+            self.queue.push_back(InputEvent::KeyCode(code));
+          }
+        }
+      }
     }
   }
-  pub fn get_next_line(&mut self) -> Option<String> {
+  pub fn next(&mut self) -> Option<InputEvent> {
     self.queue.pop_front()
   }
-  fn put_bytes(&mut self, buf: &[u8]) {
+  fn put_str(&mut self, s: &str) {
     let c = self.cursor.min(self.value.len());
-    let s = String::from_utf8_lossy(buf);
     self.value = self.value[0..c].to_string() + &s + &self.value[c..];
     self.cursor = (self.cursor+1).min(self.value.len());
   }
