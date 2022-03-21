@@ -14,7 +14,6 @@ pub struct App<S: Store> {
   cables: HashMap<Addr,Cable<S>>,
   connections: HashSet<Connection>,
   storage_fn: Box<dyn Fn (&str) -> Box<S>>,
-  active_addr: Option<Addr>,
   pub ui: Arc<Mutex<UI>>,
   exit: bool,
 }
@@ -25,7 +24,6 @@ impl<S> App<S> where S: Store {
       cables: HashMap::new(),
       connections: HashSet::new(),
       storage_fn,
-      active_addr: None,
       ui: Arc::new(Mutex::new(UI::new(size))),
       exit: false,
     }
@@ -74,7 +72,7 @@ impl<S> App<S> where S: Store {
         ui.update();
       },
       "/join" | "/j" => {
-        if let Some(address) = self.active_addr.clone() {
+        if let Some((address,mut cable)) = self.get_active_cable().await {
           if let Some(channel) = args.get(1) {
             let ch = channel.as_bytes().to_vec();
             let limit = {
@@ -84,7 +82,6 @@ impl<S> App<S> where S: Store {
               ui.update();
               ui.get_size().1 as usize
             };
-            let mut cable = self.get_active_cable().await.unwrap();
             let m_ui = self.ui.clone();
             task::spawn(async move {
               let mut stream = cable.open_channel(&ChannelOptions {
@@ -98,11 +95,7 @@ impl<S> App<S> where S: Store {
                   PostBody::Text { timestamp, text, channel: _ } => {
                     let mut ui = m_ui.lock().await;
                     if let Some(w) = ui.get_window(&address, &ch) {
-                      if let Ok(s) = String::from_utf8(text.clone()) {
-                        w.insert(timestamp, &s);
-                      } else {
-                        w.insert(timestamp, &format!["{:?}", text]);
-                      }
+                      w.insert(timestamp, &String::from_utf8_lossy(&text));
                       ui.update();
                     }
                   },
@@ -131,24 +124,35 @@ impl<S> App<S> where S: Store {
             if let Some(addr) = hex::from(s_addr) {
               self.add_cable(&addr);
               self.write_status(&format!["added cabal: {}", s_addr]).await;
-              if self.active_addr.is_none() {
-                self.set_active_address(&addr);
-                self.write_status(&format!["set active cabal to {}", s_addr]).await;
-              }
+              self.set_active_address(&addr).await;
+              self.write_status(&format!["set active cabal to {}", s_addr]).await;
             } else {
               self.write_status(&format!["invalid cabal address: {}", s_addr]).await;
             }
           },
+          (Some("add"),None) => {
+            self.write_status("usage: /cabal add ADDR").await;
+          },
+          (Some("set"),Some(s_addr)) => {
+            if let Some(addr) = hex::from(s_addr) {
+              self.set_active_address(&addr).await;
+              self.write_status(&format!["set active cabal to {}", s_addr]).await;
+            } else {
+              self.write_status(&format!["invalid cabal address: {}", s_addr]).await;
+            }
+          },
+          (Some("set"),None) => {
+            self.write_status("usage: /cabal set ADDR").await;
+          },
           (Some("list"),_) => {
-            let mut ui = self.ui.lock().await;
             for addr in self.cables.keys() {
-              let star = if self.active_addr.as_ref().map(|x| x == addr).unwrap_or(false) { "*" } else { "" };
-              ui.write_status(&format!["{}{}", hex::to(addr), star]);
+              let is_active = self.get_active_address().await.map(|x| &x == addr).unwrap_or(false);
+              let star = if is_active { "*" } else { "" };
+              self.write_status(&format!["{}{}", hex::to(addr), star]).await;
             }
             if self.cables.is_empty() {
-              ui.write_status("{ no cabals in list }");
+              self.write_status("{ no cabals in list }").await;
             }
-            ui.update();
           },
           _ => {},
         }
@@ -169,12 +173,12 @@ impl<S> App<S> where S: Store {
       },
       "/connect" => {
         self.write_status(line).await;
-        if self.active_addr.is_none() {
+        if self.get_active_address().await.is_none() {
           self.write_status(
             r#"no active cabal to bind this connection. use "/cabal add" first"#
           ).await;
         } else if let Some(tcp_addr) = args.get(1).cloned() {
-          let cable = self.get_active_cable().await.unwrap();
+          let (_,cable) = self.get_active_cable().await.unwrap();
           self.connections.insert(Connection::Connected(tcp_addr.clone()));
           let mui = self.ui.clone();
           task::spawn(async move {
@@ -195,7 +199,7 @@ impl<S> App<S> where S: Store {
       },
       "/listen" => {
         self.write_status(line).await;
-        if self.active_addr.is_none() {
+        if self.get_active_address().await.is_none() {
           self.write_status(
             r#"no active cabal to bind this connection. use "/cabal add" first"#
           ).await;
@@ -203,7 +207,7 @@ impl<S> App<S> where S: Store {
           if !tcp_addr.contains(":") {
             tcp_addr = format!["0.0.0.0:{}", tcp_addr];
           }
-          let cable = self.get_active_cable().await.unwrap();
+          let (_,cable) = self.get_active_cable().await.unwrap();
           self.connections.insert(Connection::Listening(tcp_addr.clone()));
           let mui = self.ui.clone();
           task::spawn(async move {
@@ -244,8 +248,11 @@ impl<S> App<S> where S: Store {
     let s_addr = hex::to(addr);
     self.cables.insert(addr.to_vec(), Cable::new(*(self.storage_fn)(&s_addr)));
   }
-  pub fn set_active_address(&mut self, addr: &Addr) {
-    self.active_addr = Some(addr.clone());
+  pub async fn set_active_address(&self, addr: &Addr) {
+    self.ui.lock().await.set_active_address(addr);
+  }
+  pub async fn get_active_address(&self) -> Option<Addr> {
+    self.ui.lock().await.get_active_address().cloned()
   }
   pub async fn post(&mut self, msg: &[u8]) -> Result<(),Error> {
     let mut ui = self.ui.lock().await;
@@ -261,8 +268,9 @@ impl<S> App<S> where S: Store {
     }
     Ok(())
   }
-  pub async fn get_active_cable(&mut self) -> Option<Cable<S>> {
-    self.active_addr.as_ref().and_then(|addr| self.cables.get(addr).cloned())
+  pub async fn get_active_cable(&mut self) -> Option<(Addr,Cable<S>)> {
+    self.ui.lock().await.get_active_address()
+      .and_then(|addr| self.cables.get(addr).map(|c| (addr.clone(), c.clone())))
   }
   pub async fn write_status(&self, msg: &str) {
     let mut ui = self.ui.lock().await;

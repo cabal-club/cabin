@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 pub struct UI {
   pub active_window: usize,
+  pub active_address: Option<Addr>,
   pub windows: Vec<Window>,
   pub diff: ansi_diff::Diff,
   pub size: TermSize,
@@ -22,6 +23,7 @@ impl UI {
       diff: ansi_diff::Diff::new(size),
       size,
       active_window: 0,
+      active_address: None,
       windows,
       input: Input::default(),
       stdout: std::io::stdout(),
@@ -48,6 +50,12 @@ impl UI {
   }
   pub fn set_active_index(&mut self, index: usize) {
     self.active_window = index.min(self.windows.len().max(1)-1);
+  }
+  pub fn get_active_address<'a>(&'a self) -> Option<&'a Addr> {
+    self.active_address.as_ref()
+  }
+  pub fn set_active_address(&mut self, addr: &Addr) {
+    self.active_address = Some(addr.clone());
   }
   pub fn add_window(&mut self, address: Addr, channel: Channel) -> usize {
     self.windows.push(Window::new(address, channel));
@@ -88,8 +96,20 @@ impl UI {
       "{}{}",
       if self.tick == 0 { "\x1bc\x1b[?25l" } else { "" }, // clear, turn off cursor
       self.diff.update(&format![
-        "CABIN {}\n{}\n> {}",
-        hex::to(&w.address),
+        "[{}] {}\n{}\n> {}",
+        if w.channel == "!status".as_bytes().to_vec() {
+          String::from_utf8_lossy(&w.channel).to_string()
+        } else {
+          format!["#{}", &String::from_utf8_lossy(&w.channel)]
+        },
+        if w.channel == "!status".as_bytes().to_vec() && self.active_address.is_some() {
+          let addr = self.active_address.as_ref().unwrap();
+          format!["cabal://{}", hex::to(&addr)]
+        } else if w.channel == "!status".as_bytes().to_vec() {
+          "".to_string()
+        } else {
+          format!["cabal://{}", hex::to(&w.address)]
+        },
         lines.join("\n"),
         &input,
       ]).split("\n").collect::<Vec<&str>>().join("\r\n"),

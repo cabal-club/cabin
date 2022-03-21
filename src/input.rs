@@ -83,7 +83,7 @@ impl Input {
   }
   fn put_bytes(&mut self, buf: &[u8]) {
     let c = self.cursor.min(self.value.len());
-    let s = String::from_utf8(buf.to_vec()).unwrap();
+    let s = String::from_utf8_lossy(buf);
     self.value = self.value[0..c].to_string() + &s + &self.value[c..];
     self.cursor = (self.cursor+1).min(self.value.len());
   }
