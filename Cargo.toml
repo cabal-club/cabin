@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 ansi-diff = "1.0.0"
 async-std = "1.10.0"
-cable = { path = "../cable.rs" }
+cable = { path = "../cable.rs/cable" }
 argmap = "1.1.1"
 term_size = "0.3.2"
 signal-hook = { version = "0.3.13", features = [ "iterator", "extended-siginfo" ] }
