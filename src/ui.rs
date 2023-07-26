@@ -1,9 +1,12 @@
-pub type Channel = Vec<u8>;
-pub type Addr = Vec<u8>;
-pub type TermSize = (u32, u32);
-use crate::{hex, input::Input};
 use std::collections::BTreeSet;
 use std::io::Write;
+
+use cable::Channel;
+
+use crate::{hex, input::Input};
+
+pub type Addr = Vec<u8>;
+pub type TermSize = (u32, u32);
 
 pub struct UI {
     pub active_window: usize,
@@ -18,7 +21,7 @@ pub struct UI {
 
 impl UI {
     pub fn new(size: TermSize) -> Self {
-        let windows = vec![Window::new(vec![], "!status".as_bytes().to_vec())];
+        let windows = vec![Window::new(vec![], "!status".to_string())];
         Self {
             diff: ansi_diff::Diff::new(size),
             size,
@@ -106,15 +109,15 @@ impl UI {
             self.diff
                 .update(&format![
                     "[{}] {}\n{}\n> {}",
-                    if w.channel == "!status".as_bytes().to_vec() {
-                        String::from_utf8_lossy(&w.channel).to_string()
+                    if w.channel == "!status" {
+                        w.channel.to_string()
                     } else {
-                        format!["#{}", &String::from_utf8_lossy(&w.channel)]
+                        format!["#{}", &w.channel]
                     },
-                    if w.channel == "!status".as_bytes().to_vec() && self.active_address.is_some() {
+                    if w.channel == "!status" && self.active_address.is_some() {
                         let addr = self.active_address.as_ref().unwrap();
                         format!["cabal://{}", hex::to(&addr)]
-                    } else if w.channel == "!status".as_bytes().to_vec() {
+                    } else if w.channel == "!status" {
                         "".to_string()
                     } else {
                         format!["cabal://{}", hex::to(&w.address)]
