@@ -1,18 +1,21 @@
-use crate::{
-    hex,
-    input::InputEvent,
-    ui::{Addr, TermSize, UI},
-};
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
+
 use async_std::{
     net,
     prelude::*,
     sync::{Arc, Mutex},
     task,
 };
-use cable::{error::Error, Cable, ChannelOptions, PostBody, Store};
-use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use cable::{error::Error, post::PostBody, ChannelOptions};
+use cable_core::{CableManager, Store};
 use terminal_keycode::KeyCode;
+
+use crate::{
+    hex,
+    input::InputEvent,
+    ui::{Addr, TermSize, UI},
+};
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 enum Connection {
@@ -20,8 +23,47 @@ enum Connection {
     Listening(String),
 }
 
+// TODO: Make this wayyy less hacky.
+async fn open_channel_and_display_text_posts<S: Store>(
+    channel: String,
+    limit: u64,
+    address: Vec<u8>,
+    mut cable: CableManager<S>,
+    m_ui: Arc<async_std::sync::Mutex<UI>>,
+) {
+    task::spawn(async move {
+        let mut stream = cable
+            .open_channel(&ChannelOptions {
+                channel: channel.clone(),
+                time_start: 0,
+                time_end: 0,
+                limit,
+            })
+            .await
+            .unwrap();
+        while let Some(r) = stream.next().await {
+            match r.unwrap().body {
+                PostBody::Text {
+                    //timestamp,
+                    text: _,
+                    channel: _,
+                } => {
+                    let mut ui = m_ui.lock().await;
+                    if let Some(_w) = ui.get_window(&address, &channel) {
+                        //w.insert(timestamp, &String::from_utf8_lossy(&text));
+                        // TODO: Get timestamp...
+                        //w.insert(timestamp, &text);
+                        ui.update();
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 pub struct App<S: Store> {
-    cables: HashMap<Addr, Cable<S>>,
+    cables: HashMap<Addr, CableManager<S>>,
     connections: HashSet<Connection>,
     storage_fn: Box<dyn Fn(&str) -> Box<S>>,
     pub ui: Arc<Mutex<UI>>,
@@ -41,6 +83,7 @@ where
             exit: false,
         }
     }
+
     pub async fn run(&mut self, mut reader: Box<dyn Read>) -> Result<(), Error> {
         self.ui.lock().await.update();
         let mut buf = vec![0];
@@ -73,6 +116,7 @@ where
         self.ui.lock().await.finish();
         Ok(())
     }
+
     pub async fn handle(&mut self, line: &str) -> Result<(), Error> {
         let args = line
             .split_whitespace()
@@ -99,44 +143,20 @@ where
                 ui.update();
             }
             "/join" | "/j" => {
-                if let Some((address, mut cable)) = self.get_active_cable().await {
+                if let Some((address, cable)) = self.get_active_cable().await {
                     if let Some(channel) = args.get(1) {
-                        let ch = channel.as_bytes().to_vec();
+                        let ch = channel.clone();
                         let limit = {
                             let mut ui = self.ui.lock().await;
                             let i = ui.add_window(address.clone(), ch.clone());
                             ui.set_active_index(i);
                             ui.update();
-                            ui.get_size().1 as usize
+                            ui.get_size().1 as u64
                         };
                         let m_ui = self.ui.clone();
-                        task::spawn(async move {
-                            let mut stream = cable
-                                .open_channel(&ChannelOptions {
-                                    channel: ch.clone(),
-                                    time_start: 0,
-                                    time_end: 0,
-                                    limit,
-                                })
-                                .await
-                                .unwrap();
-                            while let Some(r) = stream.next().await {
-                                match r.unwrap().body {
-                                    PostBody::Text {
-                                        timestamp,
-                                        text,
-                                        channel: _,
-                                    } => {
-                                        let mut ui = m_ui.lock().await;
-                                        if let Some(w) = ui.get_window(&address, &ch) {
-                                            w.insert(timestamp, &String::from_utf8_lossy(&text));
-                                            ui.update();
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        });
+                        let addr = address.clone();
+                        open_channel_and_display_text_posts(ch, limit, addr, cable.clone(), m_ui)
+                            .await;
                     } else {
                         let mut ui = self.ui.lock().await;
                         ui.write_status("usage: /join CHANNEL");
@@ -288,27 +308,33 @@ where
                     self.write_status(line).await;
                     self.write_status(&format!["no such command: {}", x]).await;
                 } else {
-                    self.post(&line.trim_end().as_bytes()).await?;
+                    self.post(&line.trim_end().to_string()).await?;
                 }
             }
         }
         Ok(())
     }
+
     pub fn add_cable(&mut self, addr: &Addr) {
         let s_addr = hex::to(addr);
-        self.cables
-            .insert(addr.to_vec(), Cable::new(*(self.storage_fn)(&s_addr)));
+        self.cables.insert(
+            addr.to_vec(),
+            CableManager::new(*(self.storage_fn)(&s_addr)),
+        );
     }
+
     pub async fn set_active_address(&self, addr: &Addr) {
         self.ui.lock().await.set_active_address(addr);
     }
+
     pub async fn get_active_address(&self) -> Option<Addr> {
         self.ui.lock().await.get_active_address().cloned()
     }
-    pub async fn post(&mut self, msg: &[u8]) -> Result<(), Error> {
+
+    pub async fn post(&mut self, msg: &String) -> Result<(), Error> {
         let mut ui = self.ui.lock().await;
         let w = ui.get_active_window();
-        if w.channel == "!status".as_bytes().to_vec() {
+        if w.channel == "!status" {
             ui.write_status("can't post text in status channel. see /help for command list");
             ui.update();
         } else {
@@ -317,18 +343,21 @@ where
         }
         Ok(())
     }
-    pub async fn get_active_cable(&mut self) -> Option<(Addr, Cable<S>)> {
+
+    pub async fn get_active_cable(&mut self) -> Option<(Addr, CableManager<S>)> {
         self.ui
             .lock()
             .await
             .get_active_address()
             .and_then(|addr| self.cables.get(addr).map(|c| (addr.clone(), c.clone())))
     }
+
     pub async fn write_status(&self, msg: &str) {
         let mut ui = self.ui.lock().await;
         ui.write_status(msg);
         ui.update();
     }
+
     pub async fn update(&self) {
         self.ui.lock().await.update();
     }
