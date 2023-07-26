@@ -2,15 +2,16 @@ use async_std::{
     sync::{Arc, Mutex},
     task,
 };
-use cabin::{
-    app::App,
-    ui::{TermSize, UI},
-};
-use cable::MemoryStore;
+use cable_core::MemoryStore;
 use raw_tty::IntoRawMode;
 use signal_hook::{
     consts::signal::SIGWINCH,
     iterator::{exfiltrator::WithOrigin, SignalsInfo},
+};
+
+use cabin::{
+    app::App,
+    ui::{TermSize, UI},
 };
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
