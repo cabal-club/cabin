@@ -14,7 +14,7 @@ use terminal_keycode::KeyCode;
 use crate::{
     hex,
     input::InputEvent,
-    ui::{Addr, TermSize, UI},
+    ui::{Addr, TermSize, Ui},
 };
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -29,7 +29,7 @@ async fn open_channel_and_display_text_posts<S: Store>(
     limit: u64,
     address: Vec<u8>,
     mut cable: CableManager<S>,
-    m_ui: Arc<async_std::sync::Mutex<UI>>,
+    m_ui: Arc<async_std::sync::Mutex<Ui>>,
 ) {
     task::spawn(async move {
         let mut stream = cable
@@ -40,23 +40,20 @@ async fn open_channel_and_display_text_posts<S: Store>(
                 limit,
             })
             .await
+            // TODO: Can we handle this unwrap another way?
             .unwrap();
-        while let Some(r) = stream.next().await {
-            match r.unwrap().body {
-                PostBody::Text {
-                    //timestamp,
-                    text: _,
-                    channel: _,
-                } => {
+
+        while let Some(post_stream) = stream.next().await {
+            if let Ok(post) = post_stream {
+                let timestamp = post.header.timestamp;
+
+                if let PostBody::Text { text, channel } = post.body {
                     let mut ui = m_ui.lock().await;
-                    if let Some(_w) = ui.get_window(&address, &channel) {
-                        //w.insert(timestamp, &String::from_utf8_lossy(&text));
-                        // TODO: Get timestamp...
-                        //w.insert(timestamp, &text);
+                    if let Some(window) = ui.get_window(&address, &channel) {
+                        window.insert(timestamp, &text);
                         ui.update();
                     }
                 }
-                _ => {}
             }
         }
     });
@@ -66,7 +63,7 @@ pub struct App<S: Store> {
     cables: HashMap<Addr, CableManager<S>>,
     connections: HashSet<Connection>,
     storage_fn: Box<dyn Fn(&str) -> Box<S>>,
-    pub ui: Arc<Mutex<UI>>,
+    pub ui: Arc<Mutex<Ui>>,
     exit: bool,
 }
 
@@ -79,7 +76,7 @@ where
             cables: HashMap::new(),
             connections: HashSet::new(),
             storage_fn,
-            ui: Arc::new(Mutex::new(UI::new(size))),
+            ui: Arc::new(Mutex::new(Ui::new(size))),
             exit: false,
         }
     }
@@ -272,7 +269,7 @@ where
                     )
                     .await;
                 } else if let Some(mut tcp_addr) = args.get(1).cloned() {
-                    if !tcp_addr.contains(":") {
+                    if !tcp_addr.contains(':') {
                         tcp_addr = format!["0.0.0.0:{}", tcp_addr];
                     }
                     let (_, cable) = self.get_active_cable().await.unwrap();
@@ -304,7 +301,7 @@ where
                 }
             }
             x => {
-                if x.starts_with("/") {
+                if x.starts_with('/') {
                     self.write_status(line).await;
                     self.write_status(&format!["no such command: {}", x]).await;
                 } else {

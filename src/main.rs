@@ -1,48 +1,31 @@
-use async_std::{
-    sync::{Arc, Mutex},
-    task,
-};
+use std::{env, io};
+
+use async_std::task;
 use cable_core::MemoryStore;
 use raw_tty::IntoRawMode;
-use signal_hook::{
-    consts::signal::SIGWINCH,
-    iterator::{exfiltrator::WithOrigin, SignalsInfo},
-};
 
-use cabin::{
-    app::App,
-    ui::{TermSize, UI},
-};
+use cabin::{app::App, ui};
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn main() -> Result<(), Error> {
-    let (_args, _argv) = argmap::parse(std::env::args());
+    // Parse the arguments.
+    let (_args, _argv) = argmap::parse(env::args());
+
+    // Launch the application, resize the UI to match the terminal dimensions
+    // and accept input via stdin.
     task::block_on(async move {
         let mut app = App::new(
-            get_size(),
-            Box::new(|_name| Box::new(MemoryStore::default())),
+            ui::get_term_size(),
+            Box::new(|_name| Box::<MemoryStore>::default()),
         );
-        let ui = app.ui.clone();
-        task::spawn(async move { resizer(ui).await });
 
-        app.run(Box::new(std::io::stdin().into_raw_mode().unwrap()))
+        let ui = app.ui.clone();
+        task::spawn(async move { ui::resizer(ui).await });
+
+        app.run(Box::new(io::stdin().into_raw_mode().unwrap()))
             .await?;
+
         Ok(())
     })
-}
-
-fn get_size() -> TermSize {
-    term_size::dimensions()
-        .map(|(w, h)| (w as u32, h as u32))
-        .unwrap()
-}
-
-async fn resizer(ui: Arc<Mutex<UI>>) {
-    let mut signals = SignalsInfo::<WithOrigin>::new(&vec![SIGWINCH]).unwrap();
-    for info in &mut signals {
-        if info.signal == SIGWINCH {
-            ui.lock().await.resize(get_size())
-        }
-    }
 }
