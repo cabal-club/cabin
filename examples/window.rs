@@ -55,7 +55,7 @@ fn main() {
                 ui.input.putc(buf[0]);
                 ui.update();
                 let mut lines = vec![];
-                while let Some(event) = ui.input.next() {
+                while let Some(event) = ui.input.next_event() {
                     if let InputEvent::Line(line) = event {
                         lines.push(line);
                     }

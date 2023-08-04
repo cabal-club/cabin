@@ -17,6 +17,8 @@ use crate::{
     ui::{Addr, TermSize, Ui},
 };
 
+type StorageFn<S> = Box<dyn Fn(&str) -> Box<S>>;
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 enum Connection {
     Connected(String),
@@ -62,7 +64,7 @@ async fn open_channel_and_display_text_posts<S: Store>(
 pub struct App<S: Store> {
     cables: HashMap<Addr, CableManager<S>>,
     connections: HashSet<Connection>,
-    storage_fn: Box<dyn Fn(&str) -> Box<S>>,
+    storage_fn: StorageFn<S>,
     pub ui: Arc<Mutex<Ui>>,
     exit: bool,
 }
@@ -71,7 +73,7 @@ impl<S> App<S>
 where
     S: Store,
 {
-    pub fn new(size: TermSize, storage_fn: Box<dyn Fn(&str) -> Box<S>>) -> Self {
+    pub fn new(size: TermSize, storage_fn: StorageFn<S>) -> Self {
         Self {
             cables: HashMap::new(),
             connections: HashSet::new(),
@@ -91,7 +93,7 @@ where
                 ui.input.putc(buf[0]);
                 ui.update();
                 let mut lines = vec![];
-                while let Some(event) = ui.input.next() {
+                while let Some(event) = ui.input.next_event() {
                     match event {
                         InputEvent::KeyCode(KeyCode::PageUp) => {}
                         InputEvent::KeyCode(KeyCode::PageDown) => {}

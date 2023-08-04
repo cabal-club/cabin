@@ -52,7 +52,7 @@ impl Input {
         }
     }
 
-    pub fn next(&mut self) -> Option<InputEvent> {
+    pub fn next_event(&mut self) -> Option<InputEvent> {
         self.queue.pop_front()
     }
 
