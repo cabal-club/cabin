@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use terminal_keycode::{Decoder, KeyCode};
 
+#[derive(Default)]
 pub struct Input {
     pub history: Vec<String>,
     pub value: String,
@@ -12,18 +13,6 @@ pub struct Input {
 pub enum InputEvent {
     Line(String),
     KeyCode(KeyCode),
-}
-
-impl Default for Input {
-    fn default() -> Self {
-        Self {
-            history: vec![],
-            value: String::default(),
-            cursor: 0,
-            decoder: Decoder::default(),
-            queue: VecDeque::new(),
-        }
-    }
 }
 
 impl Input {
@@ -62,29 +51,35 @@ impl Input {
             }
         }
     }
-    pub fn next(&mut self) -> Option<InputEvent> {
+
+    pub fn next_event(&mut self) -> Option<InputEvent> {
         self.queue.pop_front()
     }
+
     fn put_str(&mut self, s: &str) {
         let c = self.cursor.min(self.value.len());
-        self.value = self.value[0..c].to_string() + &s + &self.value[c..];
+        self.value = self.value[0..c].to_string() + s + &self.value[c..];
         self.cursor = (self.cursor + 1).min(self.value.len());
     }
+
     pub fn set_value(&mut self, input: &str) {
         self.value = input.to_string();
         self.cursor = self.cursor.min(self.value.len());
     }
+
     pub fn remove_left(&mut self, n: usize) {
         let len = self.value.len();
         let c = self.cursor;
         self.value = self.value[0..c.max(n) - n].to_string() + &self.value[c.min(len)..];
         self.cursor = self.cursor.max(n) - n;
     }
+
     pub fn remove_right(&mut self, n: usize) {
         let len = self.value.len();
         let c = self.cursor;
         self.value = self.value[0..c].to_string() + &self.value[(c + n).min(len)..];
     }
+
     pub fn set_cursor(&mut self, cursor: usize) {
         self.cursor = cursor;
     }
