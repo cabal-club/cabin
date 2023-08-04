@@ -124,11 +124,33 @@ where
         if args.is_empty() {
             return Ok(());
         }
+
         match args.get(0).unwrap().as_str() {
             "/help" => {
                 self.write_status(line).await;
                 let mut ui = self.ui.lock().await;
-                ui.write_status("available commands: TODO");
+                ui.write_status("/cabal add ADDR");
+                ui.write_status("  add a cabal");
+                ui.write_status("/cabal set ADDR");
+                ui.write_status("  set the active cabal");
+                ui.write_status("/cabal list");
+                ui.write_status("  list all known cabals");
+                ui.write_status("/connections");
+                ui.write_status("  list all known network connections");
+                ui.write_status("/connect IP:PORT");
+                ui.write_status("  connect to a peer over tcp");
+                ui.write_status("/listen PORT");
+                ui.write_status("  listen for incoming tcp connections on 0.0.0.0");
+                ui.write_status("/listen IP:PORT");
+                ui.write_status("  listen for incoming tcp connections");
+                ui.write_status("/join CHANNEL");
+                ui.write_status("  join a channel (shorthand: /j CHANNEL)");
+                ui.write_status("/win INDEX");
+                ui.write_status("  change the active window (shorthand: /w INDEX)");
+                ui.write_status("/exit");
+                ui.write_status("  exit the cabal process");
+                ui.write_status("/quit");
+                ui.write_status("  exit the cabal process (shorthand: /q)");
                 ui.update();
             }
             "/quit" | "/exit" | "/q" => {
@@ -136,10 +158,19 @@ where
                 self.exit = true;
             }
             "/win" | "/w" => {
-                let i: usize = args.get(1).unwrap().parse().unwrap();
                 let mut ui = self.ui.lock().await;
-                ui.set_active_index(i);
-                ui.update();
+                if let Some(index) = args.get(1) {
+                    if let Ok(i) = index.parse() {
+                        ui.set_active_index(i);
+                        ui.update();
+                    } else {
+                        ui.write_status("window index must be a number");
+                        ui.update();
+                    }
+                } else {
+                    ui.write_status("usage: /win INDEX");
+                    ui.update();
+                }
             }
             "/join" | "/j" => {
                 if let Some((address, cable)) = self.get_active_cable().await {
