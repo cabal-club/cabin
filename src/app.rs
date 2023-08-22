@@ -469,31 +469,24 @@ where
         }
 
         match args.get(0).unwrap().as_str() {
-            "/help" => {
-                self.write_status(line).await;
-                self.help_handler().await;
-            }
-            "/quit" | "/exit" | "/q" => {
-                self.write_status(line).await;
-                self.exit = true;
-            }
-            "/win" | "/w" => {
-                self.win_handler(args).await;
-            }
-            "/join" | "/j" => {
-                self.join_handler(args).await?;
-            }
             "/cabal" => {
                 self.write_status(line).await;
                 self.cabal_handler(args).await;
+            }
+            "/connect" => {
+                self.write_status(line).await;
+                self.connect_handler(args).await;
             }
             "/connections" => {
                 self.write_status(line).await;
                 self.connections_handler().await;
             }
-            "/connect" => {
+            "/help" => {
                 self.write_status(line).await;
-                self.connect_handler(args).await;
+                self.help_handler().await;
+            }
+            "/join" | "/j" => {
+                self.join_handler(args).await?;
             }
             "/leave" => {
                 self.leave_handler(args).await?;
@@ -501,6 +494,13 @@ where
             "/listen" => {
                 self.write_status(line).await;
                 self.listen_handler(args).await;
+            }
+            "/quit" | "/exit" | "/q" => {
+                self.write_status(line).await;
+                self.exit = true;
+            }
+            "/win" | "/w" => {
+                self.win_handler(args).await;
             }
             x => {
                 if x.starts_with('/') {
@@ -511,6 +511,7 @@ where
                 }
             }
         }
+
         Ok(())
     }
 
