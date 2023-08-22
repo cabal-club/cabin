@@ -150,6 +150,12 @@ impl Ui {
             .find(|w| &w.address == address && &w.channel == channel)
     }
 
+    pub fn get_window_index(&self, address: &Addr, channel: &Channel) -> Option<usize> {
+        self.windows
+            .iter()
+            .position(|w| &w.address == address && &w.channel == channel)
+    }
+
     pub fn move_window(&mut self, src: usize, dst: usize) {
         let w = self.windows.remove(src);
         self.windows.insert(dst, w);
