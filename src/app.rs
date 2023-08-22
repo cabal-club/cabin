@@ -137,6 +137,33 @@ where
         }
     }
 
+    /// Handle the `/channels` command.
+    ///
+    /// Prints a list of known channels for the active cable instance.
+    async fn channels_handler(&mut self) {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            let mut ui = self.ui.lock().await;
+            if let Ok(channels) = cable.store.get_channels().await {
+                if channels.is_empty() {
+                    ui.write_status("{ no known channels for the active cabal }");
+                } else {
+                    for channel in channels {
+                        ui.write_status(&format!["- {}", channel]);
+                    }
+                }
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot list channels with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+    }
+
     /// Handle the `/connect` command.
     ///
     /// Attempts a TCP connection to the given host:port.
@@ -489,6 +516,10 @@ where
             "/cabal" => {
                 self.write_status(line).await;
                 self.cabal_handler(args).await;
+            }
+            "/channels" => {
+                self.write_status(line).await;
+                self.channels_handler().await;
             }
             "/connect" => {
                 self.write_status(line).await;
