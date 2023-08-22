@@ -26,41 +26,11 @@ enum Connection {
     Listening(String),
 }
 
-// TODO: Make this wayyy less hacky.
-// TODO: Can we rather make this a method on `App`?
-async fn open_channel_and_display_text_posts<S: Store>(
-    channel: String,
-    limit: u64,
-    address: Vec<u8>,
-    mut cable: CableManager<S>,
-    m_ui: Arc<async_std::sync::Mutex<Ui>>,
-) {
-    task::spawn(async move {
-        let mut stream = cable
-            .open_channel(&ChannelOptions {
-                channel: channel.clone(),
-                time_start: 0,
-                time_end: 0,
-                limit,
-            })
-            .await
-            // TODO: Can we handle this unwrap another way?
-            .unwrap();
-
-        while let Some(post_stream) = stream.next().await {
-            if let Ok(post) = post_stream {
-                let timestamp = post.header.timestamp;
-
-                if let PostBody::Text { text, channel } = post.body {
-                    let mut ui = m_ui.lock().await;
-                    if let Some(window) = ui.get_window(&address, &channel) {
-                        window.insert(timestamp, &text);
-                        ui.update();
-                    }
-                }
-            }
-        }
-    });
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 pub struct App<S: Store> {
@@ -189,10 +159,14 @@ where
             task::spawn(async move {
                 let stream = net::TcpStream::connect(tcp_addr.clone()).await?;
 
-                // Update the UI.
-                let mut ui = ui.lock().await;
-                ui.write_status(&format!["connected to {}", tcp_addr]);
-                ui.update();
+                // This block expression is needed to drop the lock and prevent
+                // blocking of the UI.
+                {
+                    // Update the UI.
+                    let mut ui = ui.lock().await;
+                    ui.write_status(&format!["connected to {}", tcp_addr]);
+                    ui.update();
+                }
 
                 cable.listen(stream).await?;
 
@@ -256,21 +230,101 @@ where
 
     /// Handle the `/join` and `/j` commands.
     ///
-    /// Sets the active window of the UI.
-    async fn join_handler(&mut self, args: Vec<String>) {
-        if let Some((address, cable)) = self.get_active_cable().await {
+    /// Sets the active window of the UI, publishes a `post/join` if the local
+    /// peer is not already a channel member, creates a channel time range
+    /// request and updates the UI with stored and received posts.
+    async fn join_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((address, mut cable)) = self.get_active_cable().await {
             if let Some(channel) = args.get(1) {
+                // Check if the local peer is already a member of this channel.
+                // If not, publish a `post/join` post.
+                if let Some(keypair) = cable.store.get_keypair().await? {
+                    let public_key = keypair.0;
+                    if !cable.store.is_channel_member(channel, &public_key).await? {
+                        cable.post_join(channel).await?;
+                    }
+                }
+
+                let mut ui = self.ui.lock().await;
+                let channel_window_index = ui.get_window_index(&address, channel);
+
+                // Define the window index.
+                //
+                // First check if a window has previously been created for the
+                // given address / channel combination. If so, return the
+                // index. Otherwise, add a new window and return the index.
+                let index = channel_window_index
+                    .unwrap_or_else(|| ui.add_window(address.clone(), channel.clone()));
+
                 let ch = channel.clone();
+
+                /*
+                // Query the size of the UI in order to define the channel
+                // options limit.
                 let limit = {
-                    let mut ui = self.ui.lock().await;
-                    let i = ui.add_window(address.clone(), ch.clone());
-                    ui.set_active_index(i);
+                    //let mut ui = self.ui.lock().await;
+                    ui.set_active_index(index);
                     ui.update();
                     ui.get_size().1 as u64
                 };
-                let m_ui = self.ui.clone();
-                let addr = address.clone();
-                open_channel_and_display_text_posts(ch, limit, addr, cable.clone(), m_ui).await;
+                */
+                ui.set_active_index(index);
+                ui.update();
+                let ui = self.ui.clone();
+
+                // Define the channel options.
+                let opts = ChannelOptions {
+                    channel: ch.clone(),
+                    time_start: 0,
+                    time_end: 0,
+                    //limit,
+                    limit: 4096,
+                };
+
+                let mut stored_posts_stream = cable.store.get_posts(&opts).await.unwrap();
+                while let Some(post_stream) = stored_posts_stream.next().await {
+                    if let Ok(post) = post_stream {
+                        let timestamp = post.header.timestamp;
+
+                        if let PostBody::Text { text, channel } = post.body {
+                            let mut ui = ui.lock().await;
+                            if let Some(window) = ui.get_window(&address, &channel) {
+                                window.insert(timestamp, &text);
+                                ui.update();
+                            }
+                        }
+                    }
+                }
+                drop(stored_posts_stream);
+
+                // Open the channel and update the UI with received text posts;
+                // only if this action has not been performed previously.
+                //
+                // The window index is used as a proxy for "channel has been
+                // initialised".
+                if channel_window_index.is_none() {
+                    task::spawn(async move {
+                        let mut stream = cable
+                            .open_channel(&opts)
+                            .await
+                            // TODO: Can we handle this unwrap another way?
+                            .unwrap();
+
+                        while let Some(post_stream) = stream.next().await {
+                            if let Ok(post) = post_stream {
+                                let timestamp = post.header.timestamp;
+
+                                if let PostBody::Text { text, channel } = post.body {
+                                    let mut ui = ui.lock().await;
+                                    if let Some(window) = ui.get_window(&address, &channel) {
+                                        window.insert(timestamp, &text);
+                                        ui.update();
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             } else {
                 let mut ui = self.ui.lock().await;
                 ui.write_status("usage: /join CHANNEL");
@@ -285,6 +339,8 @@ where
             ]);
             ui.update();
         }
+
+        Ok(())
     }
 
     /// Handle the `/listen` command.
@@ -314,10 +370,14 @@ where
             task::spawn(async move {
                 let listener = net::TcpListener::bind(tcp_addr.clone()).await?;
 
-                // Update the UI.
-                let mut ui = ui.lock().await;
-                ui.write_status(&format!["listening on {}", tcp_addr]);
-                ui.update();
+                // This block expression is needed to drop the lock and prevent
+                // blocking of the UI.
+                {
+                    // Update the UI.
+                    let mut ui = ui.lock().await;
+                    ui.write_status(&format!["listening on {}", tcp_addr]);
+                    ui.update();
+                }
 
                 // Listen for incoming TCP connections and spawn a
                 // cable listener for each stream.
@@ -384,7 +444,7 @@ where
                 self.win_handler(args).await;
             }
             "/join" | "/j" => {
-                self.join_handler(args).await;
+                self.join_handler(args).await?;
             }
             "/cabal" => {
                 self.write_status(line).await;
