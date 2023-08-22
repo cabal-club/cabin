@@ -350,17 +350,34 @@ where
     async fn leave_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
         if let Some((_address, mut cable)) = self.get_active_cable().await {
             if let Some(channel) = args.get(1) {
-                // Cancel any active outbound channel time range requests
-                // for this channel.
-                cable.close_channel(channel).await?;
+                let channels = cable.store.get_channels().await?;
+                // Avoid closing and leaving a channel that isn't known to the
+                // local peer.
+                if channels.contains(channel) {
+                    // Cancel any active outbound channel time range requests
+                    // for this channel.
+                    cable.close_channel(channel).await?;
 
-                // Check if the local peer is a member of this channel.
-                // If so, publish a `post/leave` post.
-                if let Some(keypair) = cable.store.get_keypair().await? {
-                    let public_key = keypair.0;
-                    if cable.store.is_channel_member(channel, &public_key).await? {
-                        cable.post_leave(channel).await?;
+                    // Check if the local peer is a member of this channel.
+                    // If so, publish a `post/leave` post.
+                    if let Some(keypair) = cable.store.get_keypair().await? {
+                        let public_key = keypair.0;
+                        if cable.store.is_channel_member(channel, &public_key).await? {
+                            cable.post_leave(channel).await?;
+                        }
                     }
+
+                    // Return to the home / status window.
+                    let mut ui = self.ui.lock().await;
+                    ui.set_active_index(0);
+                    ui.update();
+                } else {
+                    let mut ui = self.ui.lock().await;
+                    ui.write_status(&format![
+                        "not currently a member of channel {}; no action taken",
+                        channel
+                    ]);
+                    ui.update();
                 }
             } else {
                 let mut ui = self.ui.lock().await;
