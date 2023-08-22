@@ -343,6 +343,43 @@ where
         Ok(())
     }
 
+    /// Handle the `/leave` command.
+    ///
+    /// Cancels any active outbound channel time range requests for the
+    /// given channel and publishes a `post/leave`.
+    async fn leave_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some(channel) = args.get(1) {
+                // Cancel any active outbound channel time range requests
+                // for this channel.
+                cable.close_channel(channel).await?;
+
+                // Check if the local peer is a member of this channel.
+                // If so, publish a `post/leave` post.
+                if let Some(keypair) = cable.store.get_keypair().await? {
+                    let public_key = keypair.0;
+                    if cable.store.is_channel_member(channel, &public_key).await? {
+                        cable.post_leave(channel).await?;
+                    }
+                }
+            } else {
+                let mut ui = self.ui.lock().await;
+                ui.write_status("usage: /leave CHANNEL");
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot leave channel with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+
+        Ok(())
+    }
+
     /// Handle the `/listen` command.
     ///
     /// Deploys a TCP server on the given host:port, listens for incoming
@@ -457,6 +494,9 @@ where
             "/connect" => {
                 self.write_status(line).await;
                 self.connect_handler(args).await;
+            }
+            "/leave" => {
+                self.leave_handler(args).await?;
             }
             "/listen" => {
                 self.write_status(line).await;
