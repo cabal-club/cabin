@@ -236,16 +236,22 @@ where
         ui.write_status("  set the active cabal");
         ui.write_status("/cabal list");
         ui.write_status("  list all known cabals");
+        ui.write_status("/channels");
+        ui.write_status("  list all known channels");
         ui.write_status("/connections");
         ui.write_status("  list all known network connections");
         ui.write_status("/connect HOST:PORT");
         ui.write_status("  connect to a peer over tcp");
+        ui.write_status("/join CHANNEL");
+        ui.write_status("  join a channel (shorthand: /j CHANNEL)");
         ui.write_status("/listen PORT");
         ui.write_status("  listen for incoming tcp connections on 0.0.0.0");
         ui.write_status("/listen HOST:PORT");
         ui.write_status("  listen for incoming tcp connections");
-        ui.write_status("/join CHANNEL");
-        ui.write_status("  join a channel (shorthand: /j CHANNEL)");
+        ui.write_status("/members CHANNEL");
+        ui.write_status("  list all known members of the channel");
+        ui.write_status("/whoami");
+        ui.write_status("  list the local public key as a hex string");
         ui.write_status("/win INDEX");
         ui.write_status("  change the active window (shorthand: /w INDEX)");
         ui.write_status("/exit");
@@ -483,6 +489,94 @@ where
         }
     }
 
+    /// Handle the `/members` command.
+    ///
+    /// Prints a list of known members of a channel. If this handler is invoked
+    /// from an active channel window, the members of that channel will be
+    /// printed. Otherwise, the handler can be invoked with a specific channel
+    /// name as an argument; this is useful for printing channel members when
+    /// the status window is active.
+    async fn members_handler(&mut self, args: Vec<String>) {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some(channel) = args.get(1) {
+                let mut ui = self.ui.lock().await;
+
+                if let Ok(members) = cable.store.get_channel_members(channel).await {
+                    if members.is_empty() {
+                        ui.write_status(
+                            "{ no known channel members for the active cabal and channel }",
+                        );
+                    } else {
+                        for member in members {
+                            // TODO: Retrieve and print the nick for each
+                            // member's public key; fall back to the public
+                            // key (formatted as a hex string) if no nick is
+                            // known.
+                            ui.write_status(&format!["  {}", hex::to(&member)]);
+                        }
+                    }
+                    ui.update();
+                }
+            } else {
+                // No args were passed to the `/members` handler. Attempt to
+                // determine the channel for the active window and print the
+                // members.
+                let mut ui = self.ui.lock().await;
+                let index = ui.get_active_index();
+                // Don't attempt to retrieve and print channel members if the
+                // status window is active.
+                if index != 0 {
+                    let window = ui.get_active_window();
+                    if let Ok(members) = cable.store.get_channel_members(&window.channel).await {
+                        if members.is_empty() {
+                            ui.write_status(
+                                "{ no known channel members for the active cabal and channel }",
+                            );
+                        } else {
+                            for member in members {
+                                // TODO: Retrieve and print the nick for each
+                                // member's public key; fall back to the public
+                                // key (formatted as a hex string) if no nick is
+                                // known.
+                                ui.write_status(&format!["  {}", hex::to(&member)]);
+                            }
+                        }
+                        ui.update();
+                    }
+                }
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot list channel members with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+    }
+
+    /// Handle the `/whoami` command.
+    ///
+    /// Prints the hex-encoded public key of the local peer.
+    async fn whoami_handler(&mut self) {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Ok(Some((public_key, _private_key))) = cable.store.get_keypair().await {
+                let mut ui = self.ui.lock().await;
+                ui.write_status(&format!["  {}", hex::to(&public_key)]);
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot list the local public key with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+    }
+
     /// Handle the `/win` and `/w` commands.
     ///
     /// Sets the active window of the UI.
@@ -543,9 +637,17 @@ where
                 self.write_status(line).await;
                 self.listen_handler(args).await;
             }
+            "/members" => {
+                self.write_status(line).await;
+                self.members_handler(args).await;
+            }
             "/quit" | "/exit" | "/q" => {
                 self.write_status(line).await;
                 self.exit = true;
+            }
+            "/whoami" => {
+                self.write_status(line).await;
+                self.whoami_handler().await;
             }
             "/win" | "/w" => {
                 self.win_handler(args).await;
