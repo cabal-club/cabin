@@ -343,6 +343,11 @@ where
                             // TODO: Can we handle this unwrap another way?
                             .unwrap();
 
+                        // TODO: Need to figure out a way to break out of this
+                        // loop when a channel is left.
+                        //
+                        // Currently results in double-printing when a channel
+                        // is rejoined after leaving.
                         while let Some(post_stream) = stream.next().await {
                             if let Ok(post) = post_stream {
                                 let timestamp = post.header.timestamp;
@@ -381,7 +386,7 @@ where
     /// Cancels any active outbound channel time range requests for the
     /// given channel and publishes a `post/leave`.
     async fn leave_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
-        if let Some((_address, mut cable)) = self.get_active_cable().await {
+        if let Some((address, mut cable)) = self.get_active_cable().await {
             if let Some(channel) = args.get(1) {
                 let channels = cable.store.get_channels().await?;
                 // Avoid closing and leaving a channel that isn't known to the
@@ -400,8 +405,12 @@ where
                         }
                     }
 
-                    // Return to the home / status window.
                     let mut ui = self.ui.lock().await;
+                    // Remove the window associated with the given channel.
+                    if let Some(index) = ui.get_window_index(&address, channel) {
+                        ui.remove_window(index)
+                    }
+                    // Return to the home / status window.
                     ui.set_active_index(0);
                     ui.update();
                 } else {
