@@ -170,6 +170,7 @@ impl Ui {
 
     pub fn update(&mut self) {
         // Get the active window.
+        // TODO: Handle the error case properly.
         let window = self.windows.get(self.active_window).unwrap();
 
         let mut lines = window
