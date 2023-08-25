@@ -1,7 +1,8 @@
 use std::{collections::BTreeSet, io::Write};
 
 use async_std::sync::{Arc, Mutex};
-use cable::Channel;
+use cable::{Channel, Topic};
+use log::debug;
 use signal_hook::{
     consts::SIGWINCH,
     iterator::{exfiltrator::WithOrigin, SignalsInfo},
@@ -35,6 +36,8 @@ pub struct Window {
     pub address: Addr,
     /// The channel whose contents the window is displaying.
     pub channel: Channel,
+    /// The channel topic.
+    pub topic: Topic,
     /// The age of the most recent post(s) to be displayed.
     pub time_end: u64,
     /// The total number of posts which may be displayed.
@@ -51,6 +54,7 @@ impl Window {
         Self {
             address,
             channel,
+            topic: String::new(),
             time_end: 0,
             limit: 50,
             lines: BTreeSet::default(),
@@ -69,6 +73,10 @@ impl Window {
         let index = self.line_index;
         self.line_index += 1;
         self.lines.insert((timestamp, index, text.to_string()));
+    }
+
+    pub fn update_topic(&mut self, topic: String) {
+        self.topic = topic;
     }
 }
 
@@ -197,18 +205,23 @@ impl Ui {
             self.diff
                 .update(&format![
                     "[{}] {}\n{}\n> {}",
+                    // Display the channel name (!status or other).
                     if window.channel == "!status" {
                         window.channel.to_string()
                     } else {
                         format!["#{}", &window.channel]
                     },
+                    // Display the active cabal address.
                     if window.channel == "!status" && self.active_address.is_some() {
                         let addr = self.active_address.as_ref().unwrap();
                         format!["cabal://{}", hex::to(addr)]
                     } else if window.channel == "!status" {
                         "".to_string()
                     } else {
-                        format!["cabal://{}", hex::to(&window.address)]
+                        debug!("Printing updated topic: {:?}", &window.topic);
+                        //format!["cabal://{}", hex::to(&window.address)]
+                        // Display the channel topic.
+                        format!["{}", &window.topic]
                     },
                     lines.join("\n"),
                     &input,
