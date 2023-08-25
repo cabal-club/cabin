@@ -250,6 +250,10 @@ where
         ui.write_status("  listen for incoming tcp connections");
         ui.write_status("/members CHANNEL");
         ui.write_status("  list all known members of the channel");
+        ui.write_status("/topic");
+        ui.write_status("  list the topic of the active channel");
+        ui.write_status("/topic TOPIC");
+        ui.write_status("  set the topic of the active channel");
         ui.write_status("/whoami");
         ui.write_status("  list the local public key as a hex string");
         ui.write_status("/win INDEX");
@@ -319,10 +323,16 @@ where
                     if let Ok(post) = post_stream {
                         let timestamp = post.header.timestamp;
 
-                        if let PostBody::Text { text, channel } = post.body {
+                        if let PostBody::Text { channel, text } = post.body {
                             let mut ui = ui.lock().await;
                             if let Some(window) = ui.get_window(&address, &channel) {
                                 window.insert(timestamp, &text);
+                                ui.update();
+                            }
+                        } else if let PostBody::Topic { channel, topic } = post.body {
+                            let mut ui = ui.lock().await;
+                            if let Some(window) = ui.get_window(&address, &channel) {
+                                window.update_topic(topic);
                                 ui.update();
                             }
                         }
@@ -344,7 +354,9 @@ where
                             .unwrap();
 
                         // TODO: Need to figure out a way to break out of this
-                        // loop when a channel is left.
+                        // loop when a channel is left. Maybe create a
+                        // (one-shot) channel so that a termination message
+                        // can be sent from `close_channel()`.
                         //
                         // Currently results in double-printing when a channel
                         // is rejoined after leaving.
@@ -352,10 +364,16 @@ where
                             if let Ok(post) = post_stream {
                                 let timestamp = post.header.timestamp;
 
-                                if let PostBody::Text { text, channel } = post.body {
+                                if let PostBody::Text { channel, text } = post.body {
                                     let mut ui = ui.lock().await;
                                     if let Some(window) = ui.get_window(&address, &channel) {
                                         window.insert(timestamp, &text);
+                                        ui.update();
+                                    }
+                                } else if let PostBody::Topic { channel, topic } = post.body {
+                                    let mut ui = ui.lock().await;
+                                    if let Some(window) = ui.get_window(&address, &channel) {
+                                        window.update_topic(topic);
                                         ui.update();
                                     }
                                 }
@@ -565,6 +583,37 @@ where
         }
     }
 
+    /// Handle the `/topic` command.
+    ///
+    /// Sets the topic of the active channel.
+    async fn topic_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if args.get(1).is_some() {
+                // Get all arguments that come after the `/topic` argument.
+                let topic: String = args[1..].join(" ");
+                let mut ui = self.ui.lock().await;
+                let active_channel = ui.get_active_window().channel.to_owned();
+                if active_channel != "!status" {
+                    cable.post_topic(&active_channel, &topic).await?;
+                    ui.write_status(&format![
+                        "topic set to {:?} for channel {:?}",
+                        topic, active_channel
+                    ]);
+                    ui.update();
+                } else {
+                    ui.write_status("topic cannot be set for !status window");
+                    ui.update();
+                }
+            } else {
+                let mut ui = self.ui.lock().await;
+                ui.write_status("usage: /topic TOPIC");
+                ui.update();
+            }
+        }
+
+        Ok(())
+    }
+
     /// Handle the `/whoami` command.
     ///
     /// Prints the hex-encoded public key of the local peer.
@@ -649,6 +698,10 @@ where
             "/members" => {
                 self.write_status(line).await;
                 self.members_handler(args).await;
+            }
+            "/topic" => {
+                self.write_status(line).await;
+                self.topic_handler(args).await?;
             }
             "/quit" | "/exit" | "/q" => {
                 self.write_status(line).await;
