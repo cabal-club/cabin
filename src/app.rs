@@ -9,6 +9,7 @@ use async_std::{
 };
 use cable::{error::Error, post::PostBody, ChannelOptions};
 use cable_core::{CableManager, Store};
+use log::debug;
 use terminal_keycode::KeyCode;
 
 use crate::{
@@ -535,11 +536,15 @@ where
                         );
                     } else {
                         for member in members {
-                            // TODO: Retrieve and print the nick for each
-                            // member's public key; fall back to the public
-                            // key (formatted as a hex string) if no nick is
-                            // known.
-                            ui.write_status(&format!["  {}", hex::to(&member)]);
+                            // Retrieve and print the nick for each member's
+                            // public key.
+                            if let Some(name) = cable.store.get_name(&member).await {
+                                ui.write_status(&format!["  {}", name]);
+                            } else {
+                                // Fall back to the public key (formatted as a
+                                // hex string) if no nick is known.
+                                ui.write_status(&format!["  {}", hex::to(&member)]);
+                            }
                         }
                     }
                     ui.update();
@@ -561,11 +566,15 @@ where
                             );
                         } else {
                             for member in members {
-                                // TODO: Retrieve and print the nick for each
-                                // member's public key; fall back to the public
-                                // key (formatted as a hex string) if no nick is
-                                // known.
-                                ui.write_status(&format!["  {}", hex::to(&member)]);
+                                // Retrieve and print the nick for each member's
+                                // public key.
+                                if let Some(name) = cable.store.get_name(&member).await {
+                                    ui.write_status(&format!["  {}", name]);
+                                } else {
+                                    // Fall back to the public key (formatted as a
+                                    // hex string) if no nick is known.
+                                    ui.write_status(&format!["  {}", hex::to(&member)]);
+                                }
                             }
                         }
                         ui.update();
@@ -581,6 +590,34 @@ where
             ]);
             ui.update();
         }
+    }
+
+    /// Handle the `/nick` command.
+    ///
+    /// Set the nickname for the local peer.
+    async fn nick_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some(nick) = args.get(1) {
+                let mut ui = self.ui.lock().await;
+                let _hash = cable.post_info_name(nick).await?;
+                ui.write_status(&format!["nickname set to {:?}", nick]);
+                ui.update();
+            } else {
+                let mut ui = self.ui.lock().await;
+                ui.write_status("usage: /nick NAME");
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot assign nickname with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+
+        Ok(())
     }
 
     /// Handle the `/topic` command.
@@ -698,6 +735,10 @@ where
             "/members" => {
                 self.write_status(line).await;
                 self.members_handler(args).await;
+            }
+            "/nick" => {
+                self.write_status(line).await;
+                self.nick_handler(args).await?;
             }
             "/topic" => {
                 self.write_status(line).await;
