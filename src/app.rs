@@ -226,6 +226,35 @@ where
         ui.update();
     }
 
+    /// Handle the `/delete nick` command.
+    ///
+    /// Deletes the most recently set nickname for the local peer.
+    async fn delete_nick_handler(&mut self) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Ok(Some((public_key, _private_key))) = cable.store.get_keypair().await {
+                if let Some((_name, hash)) = cable.store.get_peer_name_and_hash(&public_key).await {
+                    cable.store.delete_post(&hash).await?;
+                    let mut ui = self.ui.lock().await;
+                    ui.write_status("deleted most recent nickname");
+                    ui.update();
+                } else {
+                    let mut ui = self.ui.lock().await;
+                    ui.write_status("no nickname found for the local peer");
+                    ui.update();
+                }
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot delete nickname with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+        Ok(())
+    }
+
     /// Handle the `/help` command.
     ///
     /// Prints a description and usage example for all commands.
@@ -243,6 +272,8 @@ where
         ui.write_status("  list all known network connections");
         ui.write_status("/connect HOST:PORT");
         ui.write_status("  connect to a peer over tcp");
+        ui.write_status("/delete nick");
+        ui.write_status("  delete the most recent nick");
         ui.write_status("/join CHANNEL");
         ui.write_status("  join a channel (shorthand: /j CHANNEL)");
         ui.write_status("/listen PORT");
@@ -368,6 +399,10 @@ where
                                 if let PostBody::Text { channel, text } = post.body {
                                     let mut ui = ui.lock().await;
                                     if let Some(window) = ui.get_window(&address, &channel) {
+                                        // TODO: Insert the hash of the post,
+                                        // as well as the public key and nick.
+                                        // The hash will allow us to delete
+                                        // this line at a later point.
                                         window.insert(timestamp, &text);
                                         ui.update();
                                     }
@@ -538,7 +573,9 @@ where
                         for member in members {
                             // Retrieve and print the nick for each member's
                             // public key.
-                            if let Some(name) = cable.store.get_name(&member).await {
+                            if let Some((name, _hash)) =
+                                cable.store.get_peer_name_and_hash(&member).await
+                            {
                                 ui.write_status(&format!["  {}", name]);
                             } else {
                                 // Fall back to the public key (formatted as a
@@ -568,7 +605,9 @@ where
                             for member in members {
                                 // Retrieve and print the nick for each member's
                                 // public key.
-                                if let Some(name) = cable.store.get_name(&member).await {
+                                if let Some((name, _hash)) =
+                                    cable.store.get_peer_name_and_hash(&member).await
+                                {
                                     ui.write_status(&format!["  {}", name]);
                                 } else {
                                     // Fall back to the public key (formatted as a
@@ -717,6 +756,10 @@ where
             "/connections" => {
                 self.write_status(line).await;
                 self.connections_handler().await;
+            }
+            "/delete nick" => {
+                self.write_status(line).await;
+                self.delete_nick_handler().await?;
             }
             "/help" => {
                 self.write_status(line).await;
