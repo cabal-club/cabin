@@ -9,7 +9,7 @@ use async_std::{
 };
 use cable::{error::Error, post::PostBody, ChannelOptions};
 use cable_core::{CableManager, Store};
-use log::debug;
+use log::{debug, error};
 use terminal_keycode::KeyCode;
 
 use crate::{
@@ -144,16 +144,14 @@ where
     async fn channels_handler(&mut self) {
         if let Some((_address, mut cable)) = self.get_active_cable().await {
             let mut ui = self.ui.lock().await;
-            if let Ok(channels) = cable.store.get_channels().await {
-                if channels.is_empty() {
-                    ui.write_status("{ no known channels for the active cabal }");
-                } else {
-                    for channel in channels {
-                        ui.write_status(&format!["- {}", channel]);
-                    }
+            if let Some(channels) = cable.store.get_channels().await {
+                for channel in channels {
+                    ui.write_status(&format!["- {}", channel]);
                 }
-                ui.update();
+            } else {
+                ui.write_status("{ no known channels for the active cabal }");
             }
+            ui.update();
         } else {
             let mut ui = self.ui.lock().await;
             ui.write_status(&format![
@@ -226,22 +224,28 @@ where
         ui.update();
     }
 
-    /// Handle the `/delete nick` command.
+    /// Handle the `/delete` command.
     ///
     /// Deletes the most recently set nickname for the local peer.
-    async fn delete_nick_handler(&mut self) -> Result<(), Error> {
+    async fn delete_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
         if let Some((_address, mut cable)) = self.get_active_cable().await {
-            if let Ok(Some((public_key, _private_key))) = cable.store.get_keypair().await {
-                if let Some((_name, hash)) = cable.store.get_peer_name_and_hash(&public_key).await {
-                    cable.store.delete_post(&hash).await?;
-                    let mut ui = self.ui.lock().await;
-                    ui.write_status("deleted most recent nickname");
-                    ui.update();
-                } else {
-                    let mut ui = self.ui.lock().await;
-                    ui.write_status("no nickname found for the local peer");
-                    ui.update();
+            if let Some("nick") = args.get(1).map(|arg| arg.as_str()) {
+                if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
+                    if let Some((_name, hash)) =
+                        cable.store.get_peer_name_and_hash(&public_key).await
+                    {
+                        cable.post_delete(vec![hash]).await?;
+                        let mut ui = self.ui.lock().await;
+                        ui.write_status("deleted most recent nickname");
+                        ui.update();
+                    } else {
+                        let mut ui = self.ui.lock().await;
+                        ui.write_status("no nickname found for the local peer");
+                        ui.update();
+                    }
                 }
+            } else {
+                self.write_status("usage: /delete nick").await;
             }
         } else {
             let mut ui = self.ui.lock().await;
@@ -307,9 +311,9 @@ where
             if let Some(channel) = args.get(1) {
                 // Check if the local peer is already a member of this channel.
                 // If not, publish a `post/join` post.
-                if let Some(keypair) = cable.store.get_keypair().await? {
+                if let Some(keypair) = cable.store.get_keypair().await {
                     let public_key = keypair.0;
-                    if !cable.store.is_channel_member(channel, &public_key).await? {
+                    if !cable.store.is_channel_member(channel, &public_key).await {
                         cable.post_join(channel).await?;
                     }
                 }
@@ -350,7 +354,7 @@ where
                     limit: 4096,
                 };
 
-                let mut stored_posts_stream = cable.store.get_posts(&opts).await.unwrap();
+                let mut stored_posts_stream = cable.store.get_posts(&opts).await;
                 while let Some(post_stream) = stored_posts_stream.next().await {
                     if let Ok(post) = post_stream {
                         let timestamp = post.header.timestamp;
@@ -442,31 +446,32 @@ where
     async fn leave_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
         if let Some((address, mut cable)) = self.get_active_cable().await {
             if let Some(channel) = args.get(1) {
-                let channels = cable.store.get_channels().await?;
-                // Avoid closing and leaving a channel that isn't known to the
-                // local peer.
-                if channels.contains(channel) {
-                    // Cancel any active outbound channel time range requests
-                    // for this channel.
-                    cable.close_channel(channel).await?;
+                if let Some(channels) = cable.store.get_channels().await {
+                    // Avoid closing and leaving a channel that isn't known to the
+                    // local peer.
+                    if channels.contains(channel) {
+                        // Cancel any active outbound channel time range requests
+                        // for this channel.
+                        cable.close_channel(channel).await?;
 
-                    // Check if the local peer is a member of this channel.
-                    // If so, publish a `post/leave` post.
-                    if let Some(keypair) = cable.store.get_keypair().await? {
-                        let public_key = keypair.0;
-                        if cable.store.is_channel_member(channel, &public_key).await? {
-                            cable.post_leave(channel).await?;
+                        // Check if the local peer is a member of this channel.
+                        // If so, publish a `post/leave` post.
+                        if let Some(keypair) = cable.store.get_keypair().await {
+                            let public_key = keypair.0;
+                            if cable.store.is_channel_member(channel, &public_key).await {
+                                cable.post_leave(channel).await?;
+                            }
                         }
-                    }
 
-                    let mut ui = self.ui.lock().await;
-                    // Remove the window associated with the given channel.
-                    if let Some(index) = ui.get_window_index(&address, channel) {
-                        ui.remove_window(index)
+                        let mut ui = self.ui.lock().await;
+                        // Remove the window associated with the given channel.
+                        if let Some(index) = ui.get_window_index(&address, channel) {
+                            ui.remove_window(index)
+                        }
+                        // Return to the home / status window.
+                        ui.set_active_index(0);
+                        ui.update();
                     }
-                    // Return to the home / status window.
-                    ui.set_active_index(0);
-                    ui.update();
                 } else {
                     let mut ui = self.ui.lock().await;
                     ui.write_status(&format![
@@ -536,7 +541,9 @@ where
                     if let Ok(stream) = stream {
                         let cable = cable.clone();
                         task::spawn(async move {
-                            cable.listen(stream).await.unwrap();
+                            if let Err(err) = cable.listen(stream).await {
+                                error!("Cable stream listener error: {}", err);
+                            }
                         });
                     }
                 }
@@ -564,12 +571,37 @@ where
             if let Some(channel) = args.get(1) {
                 let mut ui = self.ui.lock().await;
 
-                if let Ok(members) = cable.store.get_channel_members(channel).await {
-                    if members.is_empty() {
-                        ui.write_status(
-                            "{ no known channel members for the active cabal and channel }",
-                        );
-                    } else {
+                if let Some(members) = cable.store.get_channel_members(channel).await {
+                    for member in members {
+                        // Retrieve and print the nick for each member's
+                        // public key.
+                        if let Some((name, _hash)) =
+                            cable.store.get_peer_name_and_hash(&member).await
+                        {
+                            ui.write_status(&format!["  {}", name]);
+                        } else {
+                            // Fall back to the public key (formatted as a
+                            // hex string) if no nick is known.
+                            ui.write_status(&format!["  {}", hex::to(&member)]);
+                        }
+                    }
+                } else {
+                    ui.write_status(
+                        "{ no known channel members for the active cabal and channel }",
+                    );
+                }
+                ui.update();
+            } else {
+                // No args were passed to the `/members` handler. Attempt to
+                // determine the channel for the active window and print the
+                // members.
+                let mut ui = self.ui.lock().await;
+                let index = ui.get_active_index();
+                // Don't attempt to retrieve and print channel members if the
+                // status window is active.
+                if index != 0 {
+                    let window = ui.get_active_window();
+                    if let Some(members) = cable.store.get_channel_members(&window.channel).await {
                         for member in members {
                             // Retrieve and print the nick for each member's
                             // public key.
@@ -583,43 +615,14 @@ where
                                 ui.write_status(&format!["  {}", hex::to(&member)]);
                             }
                         }
+                    } else {
+                        ui.write_status(
+                            "{ no known channel members for the active cabal and channel }",
+                        );
                     }
                     ui.update();
                 }
-            } else {
-                // No args were passed to the `/members` handler. Attempt to
-                // determine the channel for the active window and print the
-                // members.
-                let mut ui = self.ui.lock().await;
-                let index = ui.get_active_index();
-                // Don't attempt to retrieve and print channel members if the
-                // status window is active.
-                if index != 0 {
-                    let window = ui.get_active_window();
-                    if let Ok(members) = cable.store.get_channel_members(&window.channel).await {
-                        if members.is_empty() {
-                            ui.write_status(
-                                "{ no known channel members for the active cabal and channel }",
-                            );
-                        } else {
-                            for member in members {
-                                // Retrieve and print the nick for each member's
-                                // public key.
-                                if let Some((name, _hash)) =
-                                    cable.store.get_peer_name_and_hash(&member).await
-                                {
-                                    ui.write_status(&format!["  {}", name]);
-                                } else {
-                                    // Fall back to the public key (formatted as a
-                                    // hex string) if no nick is known.
-                                    ui.write_status(&format!["  {}", hex::to(&member)]);
-                                }
-                            }
-                        }
-                        ui.update();
-                    }
-                }
-            }
+            };
         } else {
             let mut ui = self.ui.lock().await;
             ui.write_status(&format![
@@ -695,7 +698,7 @@ where
     /// Prints the hex-encoded public key of the local peer.
     async fn whoami_handler(&mut self) {
         if let Some((_address, mut cable)) = self.get_active_cable().await {
-            if let Ok(Some((public_key, _private_key))) = cable.store.get_keypair().await {
+            if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                 let mut ui = self.ui.lock().await;
                 ui.write_status(&format!["  {}", hex::to(&public_key)]);
                 ui.update();
@@ -757,9 +760,9 @@ where
                 self.write_status(line).await;
                 self.connections_handler().await;
             }
-            "/delete nick" => {
+            "/delete" => {
                 self.write_status(line).await;
-                self.delete_nick_handler().await?;
+                self.delete_handler(args).await?;
             }
             "/help" => {
                 self.write_status(line).await;

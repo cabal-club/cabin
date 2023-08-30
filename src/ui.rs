@@ -221,7 +221,7 @@ impl Ui {
                         debug!("Printing updated topic: {:?}", &window.topic);
                         //format!["cabal://{}", hex::to(&window.address)]
                         // Display the channel topic.
-                        format!["{}", &window.topic]
+                        window.topic.to_string()
                     },
                     lines.join("\n"),
                     &input,
