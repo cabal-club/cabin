@@ -9,6 +9,7 @@ use async_std::{
 };
 use cable::{error::Error, post::PostBody, ChannelOptions};
 use cable_core::{CableManager, Store};
+use log::{debug, error};
 use terminal_keycode::KeyCode;
 
 use crate::{
@@ -26,41 +27,11 @@ enum Connection {
     Listening(String),
 }
 
-// TODO: Make this wayyy less hacky.
-// TODO: Can we rather make this a method on `App`?
-async fn open_channel_and_display_text_posts<S: Store>(
-    channel: String,
-    limit: u64,
-    address: Vec<u8>,
-    mut cable: CableManager<S>,
-    m_ui: Arc<async_std::sync::Mutex<Ui>>,
-) {
-    task::spawn(async move {
-        let mut stream = cable
-            .open_channel(&ChannelOptions {
-                channel: channel.clone(),
-                time_start: 0,
-                time_end: 0,
-                limit,
-            })
-            .await
-            // TODO: Can we handle this unwrap another way?
-            .unwrap();
-
-        while let Some(post_stream) = stream.next().await {
-            if let Ok(post) = post_stream {
-                let timestamp = post.header.timestamp;
-
-                if let PostBody::Text { text, channel } = post.body {
-                    let mut ui = m_ui.lock().await;
-                    if let Some(window) = ui.get_window(&address, &channel) {
-                        window.insert(timestamp, &text);
-                        ui.update();
-                    }
-                }
-            }
-        }
-    });
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 pub struct App<S: Store> {
@@ -167,6 +138,31 @@ where
         }
     }
 
+    /// Handle the `/channels` command.
+    ///
+    /// Prints a list of known channels for the active cable instance.
+    async fn channels_handler(&mut self) {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            let mut ui = self.ui.lock().await;
+            if let Some(channels) = cable.store.get_channels().await {
+                for channel in channels {
+                    ui.write_status(&format!["- {}", channel]);
+                }
+            } else {
+                ui.write_status("{ no known channels for the active cabal }");
+            }
+            ui.update();
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot list channels with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+    }
+
     /// Handle the `/connect` command.
     ///
     /// Attempts a TCP connection to the given host:port.
@@ -189,10 +185,14 @@ where
             task::spawn(async move {
                 let stream = net::TcpStream::connect(tcp_addr.clone()).await?;
 
-                // Update the UI.
-                let mut ui = ui.lock().await;
-                ui.write_status(&format!["connected to {}", tcp_addr]);
-                ui.update();
+                // This block expression is needed to drop the lock and prevent
+                // blocking of the UI.
+                {
+                    // Update the UI.
+                    let mut ui = ui.lock().await;
+                    ui.write_status(&format!["connected to {}", tcp_addr]);
+                    ui.update();
+                }
 
                 cable.listen(stream).await?;
 
@@ -224,6 +224,41 @@ where
         ui.update();
     }
 
+    /// Handle the `/delete` command.
+    ///
+    /// Deletes the most recently set nickname for the local peer.
+    async fn delete_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some("nick") = args.get(1).map(|arg| arg.as_str()) {
+                if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
+                    if let Some((_name, hash)) =
+                        cable.store.get_peer_name_and_hash(&public_key).await
+                    {
+                        cable.post_delete(vec![hash]).await?;
+                        let mut ui = self.ui.lock().await;
+                        ui.write_status("deleted most recent nickname");
+                        ui.update();
+                    } else {
+                        let mut ui = self.ui.lock().await;
+                        ui.write_status("no nickname found for the local peer");
+                        ui.update();
+                    }
+                }
+            } else {
+                self.write_status("usage: /delete nick").await;
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot delete nickname with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+        Ok(())
+    }
+
     /// Handle the `/help` command.
     ///
     /// Prints a description and usage example for all commands.
@@ -235,16 +270,28 @@ where
         ui.write_status("  set the active cabal");
         ui.write_status("/cabal list");
         ui.write_status("  list all known cabals");
+        ui.write_status("/channels");
+        ui.write_status("  list all known channels");
         ui.write_status("/connections");
         ui.write_status("  list all known network connections");
         ui.write_status("/connect HOST:PORT");
         ui.write_status("  connect to a peer over tcp");
+        ui.write_status("/delete nick");
+        ui.write_status("  delete the most recent nick");
+        ui.write_status("/join CHANNEL");
+        ui.write_status("  join a channel (shorthand: /j CHANNEL)");
         ui.write_status("/listen PORT");
         ui.write_status("  listen for incoming tcp connections on 0.0.0.0");
         ui.write_status("/listen HOST:PORT");
         ui.write_status("  listen for incoming tcp connections");
-        ui.write_status("/join CHANNEL");
-        ui.write_status("  join a channel (shorthand: /j CHANNEL)");
+        ui.write_status("/members CHANNEL");
+        ui.write_status("  list all known members of the channel");
+        ui.write_status("/topic");
+        ui.write_status("  list the topic of the active channel");
+        ui.write_status("/topic TOPIC");
+        ui.write_status("  set the topic of the active channel");
+        ui.write_status("/whoami");
+        ui.write_status("  list the local public key as a hex string");
         ui.write_status("/win INDEX");
         ui.write_status("  change the active window (shorthand: /w INDEX)");
         ui.write_status("/exit");
@@ -256,21 +303,124 @@ where
 
     /// Handle the `/join` and `/j` commands.
     ///
-    /// Sets the active window of the UI.
-    async fn join_handler(&mut self, args: Vec<String>) {
-        if let Some((address, cable)) = self.get_active_cable().await {
+    /// Sets the active window of the UI, publishes a `post/join` if the local
+    /// peer is not already a channel member, creates a channel time range
+    /// request and updates the UI with stored and received posts.
+    async fn join_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((address, mut cable)) = self.get_active_cable().await {
             if let Some(channel) = args.get(1) {
+                // Check if the local peer is already a member of this channel.
+                // If not, publish a `post/join` post.
+                if let Some(keypair) = cable.store.get_keypair().await {
+                    let public_key = keypair.0;
+                    if !cable.store.is_channel_member(channel, &public_key).await {
+                        cable.post_join(channel).await?;
+                    }
+                }
+
+                let mut ui = self.ui.lock().await;
+                let channel_window_index = ui.get_window_index(&address, channel);
+
+                // Define the window index.
+                //
+                // First check if a window has previously been created for the
+                // given address / channel combination. If so, return the
+                // index. Otherwise, add a new window and return the index.
+                let index = channel_window_index
+                    .unwrap_or_else(|| ui.add_window(address.clone(), channel.clone()));
+
                 let ch = channel.clone();
+
+                /*
+                // Query the size of the UI in order to define the channel
+                // options limit.
                 let limit = {
-                    let mut ui = self.ui.lock().await;
-                    let i = ui.add_window(address.clone(), ch.clone());
-                    ui.set_active_index(i);
+                    //let mut ui = self.ui.lock().await;
+                    ui.set_active_index(index);
                     ui.update();
                     ui.get_size().1 as u64
                 };
-                let m_ui = self.ui.clone();
-                let addr = address.clone();
-                open_channel_and_display_text_posts(ch, limit, addr, cable.clone(), m_ui).await;
+                */
+                ui.set_active_index(index);
+                ui.update();
+                let ui = self.ui.clone();
+
+                // Define the channel options.
+                let opts = ChannelOptions {
+                    channel: ch.clone(),
+                    time_start: 0,
+                    time_end: 0,
+                    //limit,
+                    limit: 4096,
+                };
+
+                let mut stored_posts_stream = cable.store.get_posts(&opts).await;
+                while let Some(post_stream) = stored_posts_stream.next().await {
+                    if let Ok(post) = post_stream {
+                        let timestamp = post.header.timestamp;
+
+                        if let PostBody::Text { channel, text } = post.body {
+                            let mut ui = ui.lock().await;
+                            if let Some(window) = ui.get_window(&address, &channel) {
+                                window.insert(timestamp, &text);
+                                ui.update();
+                            }
+                        } else if let PostBody::Topic { channel, topic } = post.body {
+                            let mut ui = ui.lock().await;
+                            if let Some(window) = ui.get_window(&address, &channel) {
+                                window.update_topic(topic);
+                                ui.update();
+                            }
+                        }
+                    }
+                }
+                drop(stored_posts_stream);
+
+                // Open the channel and update the UI with received text posts;
+                // only if this action has not been performed previously.
+                //
+                // The window index is used as a proxy for "channel has been
+                // initialised".
+                if channel_window_index.is_none() {
+                    task::spawn(async move {
+                        let mut stream = cable
+                            .open_channel(&opts)
+                            .await
+                            // TODO: Can we handle this unwrap another way?
+                            .unwrap();
+
+                        // TODO: Need to figure out a way to break out of this
+                        // loop when a channel is left. Maybe create a
+                        // (one-shot) channel so that a termination message
+                        // can be sent from `close_channel()`.
+                        //
+                        // Currently results in double-printing when a channel
+                        // is rejoined after leaving.
+                        while let Some(post_stream) = stream.next().await {
+                            if let Ok(post) = post_stream {
+                                let timestamp = post.header.timestamp;
+
+                                if let PostBody::Text { channel, text } = post.body {
+                                    let mut ui = ui.lock().await;
+                                    if let Some(window) = ui.get_window(&address, &channel) {
+                                        // TODO: Insert the hash of the post,
+                                        // as well as the public key and nick.
+                                        // The hash will allow us to delete
+                                        // this line at a later point.
+                                        window.insert(timestamp, &text);
+                                        ui.update();
+                                    }
+                                } else if let PostBody::Topic { channel, topic } = post.body {
+                                    let mut ui = ui.lock().await;
+                                    if let Some(window) = ui.get_window(&address, &channel) {
+                                        window.update_topic(topic);
+                                        ui.update();
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             } else {
                 let mut ui = self.ui.lock().await;
                 ui.write_status("usage: /join CHANNEL");
@@ -285,6 +435,67 @@ where
             ]);
             ui.update();
         }
+
+        Ok(())
+    }
+
+    /// Handle the `/leave` command.
+    ///
+    /// Cancels any active outbound channel time range requests for the
+    /// given channel and publishes a `post/leave`.
+    async fn leave_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((address, mut cable)) = self.get_active_cable().await {
+            if let Some(channel) = args.get(1) {
+                if let Some(channels) = cable.store.get_channels().await {
+                    // Avoid closing and leaving a channel that isn't known to the
+                    // local peer.
+                    if channels.contains(channel) {
+                        // Cancel any active outbound channel time range requests
+                        // for this channel.
+                        cable.close_channel(channel).await?;
+
+                        // Check if the local peer is a member of this channel.
+                        // If so, publish a `post/leave` post.
+                        if let Some(keypair) = cable.store.get_keypair().await {
+                            let public_key = keypair.0;
+                            if cable.store.is_channel_member(channel, &public_key).await {
+                                cable.post_leave(channel).await?;
+                            }
+                        }
+
+                        let mut ui = self.ui.lock().await;
+                        // Remove the window associated with the given channel.
+                        if let Some(index) = ui.get_window_index(&address, channel) {
+                            ui.remove_window(index)
+                        }
+                        // Return to the home / status window.
+                        ui.set_active_index(0);
+                        ui.update();
+                    }
+                } else {
+                    let mut ui = self.ui.lock().await;
+                    ui.write_status(&format![
+                        "not currently a member of channel {}; no action taken",
+                        channel
+                    ]);
+                    ui.update();
+                }
+            } else {
+                let mut ui = self.ui.lock().await;
+                ui.write_status("usage: /leave CHANNEL");
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot leave channel with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+
+        Ok(())
     }
 
     /// Handle the `/listen` command.
@@ -314,10 +525,14 @@ where
             task::spawn(async move {
                 let listener = net::TcpListener::bind(tcp_addr.clone()).await?;
 
-                // Update the UI.
-                let mut ui = ui.lock().await;
-                ui.write_status(&format!["listening on {}", tcp_addr]);
-                ui.update();
+                // This block expression is needed to drop the lock and prevent
+                // blocking of the UI.
+                {
+                    // Update the UI.
+                    let mut ui = ui.lock().await;
+                    ui.write_status(&format!["listening on {}", tcp_addr]);
+                    ui.update();
+                }
 
                 // Listen for incoming TCP connections and spawn a
                 // cable listener for each stream.
@@ -326,7 +541,9 @@ where
                     if let Ok(stream) = stream {
                         let cable = cable.clone();
                         task::spawn(async move {
-                            cable.listen(stream).await.unwrap();
+                            if let Err(err) = cable.listen(stream).await {
+                                error!("Cable stream listener error: {}", err);
+                            }
                         });
                     }
                 }
@@ -338,6 +555,161 @@ where
             // Print usage example for the listen command.
             let mut ui = self.ui.lock().await;
             ui.write_status("usage: /listen (ADDR:)PORT");
+            ui.update();
+        }
+    }
+
+    /// Handle the `/members` command.
+    ///
+    /// Prints a list of known members of a channel. If this handler is invoked
+    /// from an active channel window, the members of that channel will be
+    /// printed. Otherwise, the handler can be invoked with a specific channel
+    /// name as an argument; this is useful for printing channel members when
+    /// the status window is active.
+    async fn members_handler(&mut self, args: Vec<String>) {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some(channel) = args.get(1) {
+                let mut ui = self.ui.lock().await;
+
+                if let Some(members) = cable.store.get_channel_members(channel).await {
+                    for member in members {
+                        // Retrieve and print the nick for each member's
+                        // public key.
+                        if let Some((name, _hash)) =
+                            cable.store.get_peer_name_and_hash(&member).await
+                        {
+                            ui.write_status(&format!["  {}", name]);
+                        } else {
+                            // Fall back to the public key (formatted as a
+                            // hex string) if no nick is known.
+                            ui.write_status(&format!["  {}", hex::to(&member)]);
+                        }
+                    }
+                } else {
+                    ui.write_status(
+                        "{ no known channel members for the active cabal and channel }",
+                    );
+                }
+                ui.update();
+            } else {
+                // No args were passed to the `/members` handler. Attempt to
+                // determine the channel for the active window and print the
+                // members.
+                let mut ui = self.ui.lock().await;
+                let index = ui.get_active_index();
+                // Don't attempt to retrieve and print channel members if the
+                // status window is active.
+                if index != 0 {
+                    let window = ui.get_active_window();
+                    if let Some(members) = cable.store.get_channel_members(&window.channel).await {
+                        for member in members {
+                            // Retrieve and print the nick for each member's
+                            // public key.
+                            if let Some((name, _hash)) =
+                                cable.store.get_peer_name_and_hash(&member).await
+                            {
+                                ui.write_status(&format!["  {}", name]);
+                            } else {
+                                // Fall back to the public key (formatted as a
+                                // hex string) if no nick is known.
+                                ui.write_status(&format!["  {}", hex::to(&member)]);
+                            }
+                        }
+                    } else {
+                        ui.write_status(
+                            "{ no known channel members for the active cabal and channel }",
+                        );
+                    }
+                    ui.update();
+                }
+            };
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot list channel members with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+    }
+
+    /// Handle the `/nick` command.
+    ///
+    /// Set the nickname for the local peer.
+    async fn nick_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some(nick) = args.get(1) {
+                let mut ui = self.ui.lock().await;
+                let _hash = cable.post_info_name(nick).await?;
+                ui.write_status(&format!["nickname set to {:?}", nick]);
+                ui.update();
+            } else {
+                let mut ui = self.ui.lock().await;
+                ui.write_status("usage: /nick NAME");
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot assign nickname with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
+            ui.update();
+        }
+
+        Ok(())
+    }
+
+    /// Handle the `/topic` command.
+    ///
+    /// Sets the topic of the active channel.
+    async fn topic_handler(&mut self, args: Vec<String>) -> Result<(), Error> {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if args.get(1).is_some() {
+                // Get all arguments that come after the `/topic` argument.
+                let topic: String = args[1..].join(" ");
+                let mut ui = self.ui.lock().await;
+                let active_channel = ui.get_active_window().channel.to_owned();
+                if active_channel != "!status" {
+                    cable.post_topic(&active_channel, &topic).await?;
+                    ui.write_status(&format![
+                        "topic set to {:?} for channel {:?}",
+                        topic, active_channel
+                    ]);
+                    ui.update();
+                } else {
+                    ui.write_status("topic cannot be set for !status window");
+                    ui.update();
+                }
+            } else {
+                let mut ui = self.ui.lock().await;
+                ui.write_status("usage: /topic TOPIC");
+                ui.update();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle the `/whoami` command.
+    ///
+    /// Prints the hex-encoded public key of the local peer.
+    async fn whoami_handler(&mut self) {
+        if let Some((_address, mut cable)) = self.get_active_cable().await {
+            if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
+                let mut ui = self.ui.lock().await;
+                ui.write_status(&format!["  {}", hex::to(&public_key)]);
+                ui.update();
+            }
+        } else {
+            let mut ui = self.ui.lock().await;
+            ui.write_status(&format![
+                "{}{}",
+                "cannot list the local public key with no active cabal set.",
+                " add a cabal with \"/cabal add\" first",
+            ]);
             ui.update();
         }
     }
@@ -372,35 +744,62 @@ where
         }
 
         match args.get(0).unwrap().as_str() {
-            "/help" => {
-                self.write_status(line).await;
-                self.help_handler().await;
-            }
-            "/quit" | "/exit" | "/q" => {
-                self.write_status(line).await;
-                self.exit = true;
-            }
-            "/win" | "/w" => {
-                self.win_handler(args).await;
-            }
-            "/join" | "/j" => {
-                self.join_handler(args).await;
-            }
             "/cabal" => {
                 self.write_status(line).await;
                 self.cabal_handler(args).await;
             }
-            "/connections" => {
+            "/channels" => {
                 self.write_status(line).await;
-                self.connections_handler().await;
+                self.channels_handler().await;
             }
             "/connect" => {
                 self.write_status(line).await;
                 self.connect_handler(args).await;
             }
+            "/connections" => {
+                self.write_status(line).await;
+                self.connections_handler().await;
+            }
+            "/delete" => {
+                self.write_status(line).await;
+                self.delete_handler(args).await?;
+            }
+            "/help" => {
+                self.write_status(line).await;
+                self.help_handler().await;
+            }
+            "/join" | "/j" => {
+                self.join_handler(args).await?;
+            }
+            "/leave" => {
+                self.leave_handler(args).await?;
+            }
             "/listen" => {
                 self.write_status(line).await;
                 self.listen_handler(args).await;
+            }
+            "/members" => {
+                self.write_status(line).await;
+                self.members_handler(args).await;
+            }
+            "/nick" => {
+                self.write_status(line).await;
+                self.nick_handler(args).await?;
+            }
+            "/topic" => {
+                self.write_status(line).await;
+                self.topic_handler(args).await?;
+            }
+            "/quit" | "/exit" | "/q" => {
+                self.write_status(line).await;
+                self.exit = true;
+            }
+            "/whoami" => {
+                self.write_status(line).await;
+                self.whoami_handler().await;
+            }
+            "/win" | "/w" => {
+                self.win_handler(args).await;
             }
             x => {
                 if x.starts_with('/') {
@@ -411,6 +810,7 @@ where
                 }
             }
         }
+
         Ok(())
     }
 

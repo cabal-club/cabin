@@ -9,6 +9,9 @@ use cabin::{app::App, ui};
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn main() -> Result<(), Error> {
+    // Initialise the logger.
+    env_logger::init();
+
     // Parse the arguments.
     let (_args, _argv) = argmap::parse(env::args());
 
