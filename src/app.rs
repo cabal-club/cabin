@@ -81,13 +81,11 @@ where
         let abort_handles = self.abort_handles.clone();
 
         task::spawn(async move {
-            loop {
-                while let Some(close_channel) = close_channel_receiver.next().await {
-                    let abort_handles = abort_handles.lock().await;
-                    if let Some(handle) = abort_handles.get(&close_channel) {
-                        debug!("Aborting post display task for channel {:?}", close_channel);
-                        handle.abort();
-                    }
+            while let Some(close_channel) = close_channel_receiver.next().await {
+                let abort_handles = abort_handles.lock().await;
+                if let Some(handle) = abort_handles.get(&close_channel) {
+                    debug!("Aborting post display task for channel {:?}", close_channel);
+                    handle.abort();
                 }
             }
         });
