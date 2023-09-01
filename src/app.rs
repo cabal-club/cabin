@@ -1,5 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::{
+    collections::{HashMap, HashSet},
+    io::Read,
+};
 
 use async_std::{
     net,
@@ -7,8 +9,9 @@ use async_std::{
     sync::{Arc, Mutex},
     task,
 };
-use cable::{error::Error, post::PostBody, ChannelOptions};
+use cable::{error::Error, post::PostBody, Channel, ChannelOptions};
 use cable_core::{CableManager, Store};
+use futures::{channel::mpsc, future::AbortHandle, stream::Abortable, SinkExt};
 use log::{debug, error};
 use terminal_keycode::KeyCode;
 
@@ -19,6 +22,9 @@ use crate::{
 };
 
 type StorageFn<S> = Box<dyn Fn(&str) -> Box<S>>;
+
+type CloseChannelSender = mpsc::UnboundedSender<Channel>;
+type CloseChannelReceiver = mpsc::UnboundedReceiver<Channel>;
 
 /// A TCP connection and associated address (host:post).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -35,8 +41,10 @@ fn now() -> u64 {
 }
 
 pub struct App<S: Store> {
+    abort_handles: Arc<Mutex<HashMap<Channel, AbortHandle>>>,
     cables: HashMap<Addr, CableManager<S>>,
     connections: HashSet<Connection>,
+    close_channel_sender: CloseChannelSender,
     storage_fn: StorageFn<S>,
     pub ui: Arc<Mutex<Ui>>,
     exit: bool,
@@ -46,14 +54,43 @@ impl<S> App<S>
 where
     S: Store,
 {
-    pub fn new(size: TermSize, storage_fn: StorageFn<S>) -> Self {
+    pub fn new(
+        size: TermSize,
+        storage_fn: StorageFn<S>,
+        close_channel_sender: CloseChannelSender,
+    ) -> Self {
         Self {
+            abort_handles: Arc::new(Mutex::new(HashMap::new())),
             cables: HashMap::new(),
             connections: HashSet::new(),
+            close_channel_sender,
             storage_fn,
             ui: Arc::new(Mutex::new(Ui::new(size))),
             exit: false,
         }
+    }
+
+    /// Listen for "close channel" messages and abort the associated task
+    /// responsible for updating the UI with posts from the given channel.
+    /// This prevents double-posting to the UI if a channel is left and then
+    /// later rejoined.
+    ///
+    /// A "close channel" message is sent when the `close_channel()` handler
+    /// is invoked.
+    async fn launch_abort_listener(&mut self, mut close_channel_receiver: CloseChannelReceiver) {
+        let abort_handles = self.abort_handles.clone();
+
+        task::spawn(async move {
+            loop {
+                while let Some(close_channel) = close_channel_receiver.next().await {
+                    let abort_handles = abort_handles.lock().await;
+                    if let Some(handle) = abort_handles.get(&close_channel) {
+                        debug!("Aborting post display task for channel {:?}", close_channel);
+                        handle.abort();
+                    }
+                }
+            }
+        });
     }
 
     /// Add the given cabal address (key) to the cable manager.
@@ -382,20 +419,24 @@ where
                 // The window index is used as a proxy for "channel has been
                 // initialised".
                 if channel_window_index.is_none() {
-                    task::spawn(async move {
+                    // Create an abort handle and add it to the local map.
+                    //
+                    // This allows the `display_posts` task to be aborted
+                    // when the channel is left, thereby preventing double
+                    // posting to the UI if the channel is later rejoined.
+                    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+                    self.abort_handles
+                        .lock()
+                        .await
+                        .insert(channel.to_owned(), abort_handle);
+
+                    let display_posts = async move {
                         let mut stream = cable
                             .open_channel(&opts)
                             .await
                             // TODO: Can we handle this unwrap another way?
                             .unwrap();
 
-                        // TODO: Need to figure out a way to break out of this
-                        // loop when a channel is left. Maybe create a
-                        // (one-shot) channel so that a termination message
-                        // can be sent from `close_channel()`.
-                        //
-                        // Currently results in double-printing when a channel
-                        // is rejoined after leaving.
                         while let Some(post_stream) = stream.next().await {
                             if let Ok(post) = post_stream {
                                 let timestamp = post.header.timestamp;
@@ -419,7 +460,9 @@ where
                                 }
                             }
                         }
-                    });
+                    };
+
+                    task::spawn(Abortable::new(display_posts, abort_registration));
                 }
             } else {
                 let mut ui = self.ui.lock().await;
@@ -462,6 +505,8 @@ where
                                 cable.post_leave(channel).await?;
                             }
                         }
+
+                        self.close_channel_sender.send(channel.to_owned()).await?;
 
                         let mut ui = self.ui.lock().await;
                         // Remove the window associated with the given channel.
@@ -832,7 +877,13 @@ where
     /// Run the application.
     ///
     /// Handle input and update the UI.
-    pub async fn run(&mut self, mut reader: Box<dyn Read>) -> Result<(), Error> {
+    pub async fn run(
+        &mut self,
+        mut reader: Box<dyn Read>,
+        close_channel_receiver: CloseChannelReceiver,
+    ) -> Result<(), Error> {
+        self.launch_abort_listener(close_channel_receiver).await;
+
         self.ui.lock().await.update();
 
         let mut buf = vec![0];
