@@ -389,15 +389,27 @@ where
                     limit: 4096,
                 };
 
+                let store = cable.store.clone();
+
                 let mut stored_posts_stream = cable.store.get_posts(&opts).await;
                 while let Some(post_stream) = stored_posts_stream.next().await {
                     if let Ok(post) = post_stream {
                         let timestamp = post.header.timestamp;
+                        let public_key = post.header.public_key;
+
+                        // Lookup the nick for the public key.
+                        let author = if let Some((nick, _)) =
+                            store.get_peer_name_and_hash(&public_key).await
+                        {
+                            nick
+                        } else {
+                            hex::to(&public_key[..8])
+                        };
 
                         if let PostBody::Text { channel, text } = post.body {
                             let mut ui = ui.lock().await;
                             if let Some(window) = ui.get_window(&address, &channel) {
-                                window.insert(timestamp, &text);
+                                window.insert(timestamp, Some(author), &text);
                                 ui.update();
                             }
                         } else if let PostBody::Topic { channel, topic } = post.body {
@@ -428,6 +440,8 @@ where
                         .await
                         .insert(channel.to_owned(), abort_handle);
 
+                    let store = cable.store.clone();
+
                     let display_posts = async move {
                         let mut stream = cable
                             .open_channel(&opts)
@@ -437,16 +451,24 @@ where
 
                         while let Some(post_stream) = stream.next().await {
                             if let Ok(post) = post_stream {
+                                let public_key = post.header.public_key;
                                 let timestamp = post.header.timestamp;
+
+                                // Lookup the nick for the public key.
+                                let author = if let Some((nick, _)) =
+                                    store.get_peer_name_and_hash(&public_key).await
+                                {
+                                    nick
+                                } else {
+                                    // Default to the public key if no nick is
+                                    // available.
+                                    hex::to(&public_key[..4])
+                                };
 
                                 if let PostBody::Text { channel, text } = post.body {
                                     let mut ui = ui.lock().await;
                                     if let Some(window) = ui.get_window(&address, &channel) {
-                                        // TODO: Insert the hash of the post,
-                                        // as well as the public key and nick.
-                                        // The hash will allow us to delete
-                                        // this line at a later point.
-                                        window.insert(timestamp, &text);
+                                        window.insert(timestamp, Some(author), &text);
                                         ui.update();
                                     }
                                 } else if let PostBody::Topic { channel, topic } = post.body {
