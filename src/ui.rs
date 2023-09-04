@@ -42,8 +42,8 @@ pub struct Window {
     pub time_end: u64,
     /// The total number of posts which may be displayed.
     pub limit: usize,
-    /// The lines of the window (timestamp, index, text).
-    pub lines: BTreeSet<(u64, u64, String)>,
+    /// The lines of the window (index, timestamp, author, text).
+    pub lines: BTreeSet<(u64, u64, Option<String>, String)>,
     /// A line index counter to facilitate line insertions.
     line_index: u64,
 }
@@ -64,15 +64,19 @@ impl Window {
 
     /// Write the message to the window.
     pub fn write(&mut self, msg: &str) {
-        self.insert(time::now(), msg);
+        self.insert(time::now(), None, msg);
     }
 
-    /// Insert a new line into the window using the given message timestamp
-    /// and text.
-    pub fn insert(&mut self, timestamp: u64, text: &str) {
+    /// Insert a new line into the window using the given message timestamp,
+    /// name and text.
+    ///
+    /// The name will be the public key of the post author if a name-defining
+    /// `post/info` is not available.
+    pub fn insert(&mut self, timestamp: u64, author: Option<String>, text: &str) {
         let index = self.line_index;
         self.line_index += 1;
-        self.lines.insert((timestamp, index, text.to_string()));
+        self.lines
+            .insert((index, timestamp, author, text.to_string()));
     }
 
     pub fn update_topic(&mut self, topic: String) {
@@ -184,7 +188,13 @@ impl Ui {
         let mut lines = window
             .lines
             .iter()
-            .map(|(time, _, line)| format!["[{}] {}", time::timestamp(*time), line])
+            .map(|(_index, time, author, line)| {
+                if let Some(name_or_key) = author {
+                    format!["[{}] <{}> {}", time::timestamp(*time), name_or_key, line]
+                } else {
+                    format!["[{}] {} {}", time::timestamp(*time), "-status-", line]
+                }
+            })
             .collect::<Vec<String>>();
 
         for _ in lines.len()..(self.size.1 as usize) - 2 {
