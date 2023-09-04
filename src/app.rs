@@ -403,7 +403,7 @@ where
                         {
                             nick
                         } else {
-                            hex::to(&public_key[..8])
+                            hex::to(&public_key[..4])
                         };
 
                         if let PostBody::Text { channel, text } = post.body {
