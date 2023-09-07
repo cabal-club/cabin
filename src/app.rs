@@ -18,6 +18,7 @@ use terminal_keycode::KeyCode;
 use crate::{
     hex,
     input::InputEvent,
+    time,
     ui::{Addr, TermSize, Ui},
 };
 
@@ -31,13 +32,6 @@ type CloseChannelReceiver = mpsc::UnboundedReceiver<Channel>;
 enum Connection {
     Connected(String),
     Listening(String),
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
 }
 
 pub struct App<S: Store> {
@@ -177,7 +171,7 @@ where
     ///
     /// Prints a list of known channels for the active cable instance.
     async fn channels_handler(&mut self) {
-        if let Some((_address, mut cable)) = self.get_active_cable().await {
+        if let Some((_address, cable)) = self.get_active_cable().await {
             let mut ui = self.ui.lock().await;
             if let Some(channels) = cable.store.get_channels().await {
                 for channel in channels {
@@ -366,16 +360,6 @@ where
 
                 let ch = channel.clone();
 
-                /*
-                // Query the size of the UI in order to define the channel
-                // options limit.
-                let limit = {
-                    //let mut ui = self.ui.lock().await;
-                    ui.set_active_index(index);
-                    ui.update();
-                    ui.get_size().1 as u64
-                };
-                */
                 ui.set_active_index(index);
                 ui.update();
                 let ui = self.ui.clone();
@@ -383,9 +367,8 @@ where
                 // Define the channel options.
                 let opts = ChannelOptions {
                     channel: ch.clone(),
-                    time_start: 0,
+                    time_start: time::two_weeks_ago()?,
                     time_end: 0,
-                    //limit,
                     limit: 4096,
                 };
 
@@ -588,21 +571,21 @@ where
             let ui = self.ui.clone();
 
             task::spawn(async move {
-                let listener = net::TcpListener::bind(tcp_addr.clone()).await?;
+                let listener = net::TcpListener::bind(tcp_addr.clone()).await.unwrap();
 
-                // This block expression is needed to drop the lock and prevent
-                // blocking of the UI.
-                {
-                    // Update the UI.
-                    let mut ui = ui.lock().await;
-                    ui.write_status(&format!["listening on {}", tcp_addr]);
-                    ui.update();
-                }
+                // Update the UI.
+                let mut ui = ui.lock().await;
+                ui.write_status(&format!["listening on {}", tcp_addr]);
+                ui.update();
+                drop(ui);
+
+                debug!("Listening for incoming TCP connections...");
 
                 // Listen for incoming TCP connections and spawn a
                 // cable listener for each stream.
                 let mut incoming = listener.incoming();
                 while let Some(stream) = incoming.next().await {
+                    debug!("Received an incoming TCP connection");
                     if let Ok(stream) = stream {
                         let cable = cable.clone();
                         task::spawn(async move {
@@ -612,9 +595,6 @@ where
                         });
                     }
                 }
-
-                // Type inference fails without binding concretely to `Result`.
-                Result::<(), Error>::Ok(())
             });
         } else {
             // Print usage example for the listen command.
@@ -632,7 +612,7 @@ where
     /// name as an argument; this is useful for printing channel members when
     /// the status window is active.
     async fn members_handler(&mut self, args: Vec<String>) {
-        if let Some((_address, mut cable)) = self.get_active_cable().await {
+        if let Some((_address, cable)) = self.get_active_cable().await {
             if let Some(channel) = args.get(1) {
                 let mut ui = self.ui.lock().await;
 
@@ -762,7 +742,7 @@ where
     ///
     /// Prints the hex-encoded public key of the local peer.
     async fn whoami_handler(&mut self) {
-        if let Some((_address, mut cable)) = self.get_active_cable().await {
+        if let Some((_address, cable)) = self.get_active_cable().await {
             if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                 let mut ui = self.ui.lock().await;
                 ui.write_status(&format!["  {}", hex::to(&public_key)]);
