@@ -64,7 +64,7 @@ impl Window {
 
     /// Write the message to the window.
     pub fn write(&mut self, msg: &str) {
-        self.insert(time::now(), None, msg);
+        self.insert(time::now().unwrap(), None, msg);
     }
 
     /// Insert a new line into the window using the given message timestamp,
