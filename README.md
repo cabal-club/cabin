@@ -23,11 +23,11 @@ Once `cabin` has launched, a cabal must be added from the `!status` window. For 
 
 `/cabal add 1115a517c5922baa9594f5555c16e091ce4251579818fb4c4f301804c847f222`
 
-Having at least one active cabal is a prerequisite for many other behaviours and actions of `cabin`. Multiple cabals are active for each instance of `cabin`.
+Having at least one active cabal is a prerequisite for many other behaviours and actions of `cabin`. Multiple cabals are supported for each instance of `cabin`.
 
 ### Listen for TCP Connections
 
-`cabin` uses TCP to make connections with peers. Start a TCP listener by providing a port and, optionally, an IP (a default IP of `0.0.0.0` is used when an IP is not explicitly provided):
+`cabin` uses TCP to make connections with peers. Start a TCP listener by providing a port and, optionally, an IP or hostname (a default IP of `0.0.0.0` is used when one is not explicitly provided):
 
 `/listen 8007`
 
