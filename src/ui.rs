@@ -2,7 +2,6 @@ use std::{collections::BTreeSet, io::Write};
 
 use async_std::sync::{Arc, Mutex};
 use cable::{Channel, Topic};
-use log::debug;
 use signal_hook::{
     consts::SIGWINCH,
     iterator::{exfiltrator::WithOrigin, SignalsInfo},
@@ -190,9 +189,9 @@ impl Ui {
             .iter()
             .map(|(_index, time, author, line)| {
                 if let Some(name_or_key) = author {
-                    format!["[{}] <{}> {}", time::timestamp(*time), name_or_key, line]
+                    format!("[{}] <{}> {}", time::timestamp(*time), name_or_key, line)
                 } else {
-                    format!["[{}] {} {}", time::timestamp(*time), "-status-", line]
+                    format!("[{}] {} {}", time::timestamp(*time), "-status-", line)
                 }
             })
             .collect::<Vec<String>>();
@@ -208,44 +207,42 @@ impl Ui {
             self.input.value[0..c].to_string() + "\x1b[7m" + s + "\x1b[0m" + &self.input.value[n..]
         };
 
-        write![
+        write!(
             self.stdout,
             "{}{}",
             if self.tick == 0 { "\x1bc\x1b[?25l" } else { "" }, // clear, turn off cursor
             self.diff
-                .update(&format![
+                .update(&format!(
                     "[{}] {}\n{}\n> {}",
                     // Display the channel name (!status or other).
                     if window.channel == "!status" {
                         window.channel.to_string()
                     } else {
-                        format!["#{}", &window.channel]
+                        format!("#{}", &window.channel)
                     },
                     // Display the active cabal address.
                     if window.channel == "!status" && self.active_address.is_some() {
                         let addr = self.active_address.as_ref().unwrap();
-                        format!["cabal://{}", hex::to(addr)]
+                        format!("cabal://{}", hex::to(addr))
                     } else if window.channel == "!status" {
                         "".to_string()
                     } else {
-                        debug!("Printing updated topic: {:?}", &window.topic);
-                        //format!["cabal://{}", hex::to(&window.address)]
                         // Display the channel topic.
                         window.topic.to_string()
                     },
                     lines.join("\n"),
                     &input,
-                ])
+                ))
                 .split('\n')
                 .collect::<Vec<&str>>()
                 .join("\r\n"),
-        ]
+        )
         .unwrap();
         self.stdout.flush().unwrap();
         self.tick += 1;
     }
 
     pub fn finish(&mut self) {
-        write![self.stdout, "\x1bc"].unwrap();
+        write!(self.stdout, "\x1bc").unwrap();
     }
 }

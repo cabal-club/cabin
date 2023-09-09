@@ -885,6 +885,7 @@ where
         self.launch_abort_listener(close_channel_receiver).await;
 
         self.ui.lock().await.update();
+        self.write_status_banner().await;
 
         let mut buf = vec![0];
         while !self.exit {
@@ -931,6 +932,18 @@ where
     pub async fn write_status(&self, msg: &str) {
         let mut ui = self.ui.lock().await;
         ui.write_status(msg);
+        ui.update();
+    }
+
+    /// Write the welcome banner to the status window.
+    pub async fn write_status_banner(&mut self) {
+        // Include the welcome banner at compile time.
+        let banner = include_str!("../welcome.txt");
+
+        let mut ui = self.ui.lock().await;
+        for line in banner.lines() {
+            ui.write_status(line)
+        }
         ui.update();
     }
 }

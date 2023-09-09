@@ -118,6 +118,10 @@ When it comes to code styling, it's recommended to refer to the codebase and fol
 
 There are many code comments throughout the codebase labelled with `TODO`; these may provide some inspiration for initial contributions.
 
+## Credits
+
+Banner artwork is derived from ASCII artwork by Furtado H. ([source](https://ascii.co.uk/art/cabin)).
+
 ## Contact
 
 glyph (glyph@mycelial.technology).
