@@ -195,7 +195,7 @@ impl Ui {
         let mut lines = window
             .lines
             .iter()
-            .map(|(_index, time, author, nickname, line)| {
+            .map(|(_index, timestamp, author, nickname, line)| {
                 if let Some(public_key) = author {
                     let colour = utils::public_key_to_colour(public_key);
 
@@ -203,7 +203,7 @@ impl Ui {
                     if let Some(name) = nickname {
                         format!(
                             "[{}] <{}> {}",
-                            time::timestamp(*time),
+                            time::format(*timestamp),
                             name.color(colour),
                             line
                         )
@@ -213,7 +213,7 @@ impl Ui {
                         let abbreviated_public_key = hex::to(&public_key[..4]);
                         format!(
                             "[{}] <{}> {}",
-                            time::timestamp(*time),
+                            time::format(*timestamp),
                             abbreviated_public_key.color(colour),
                             line
                         )
@@ -221,7 +221,7 @@ impl Ui {
                 } else {
                     format!(
                         "[{}] {} {}",
-                        time::timestamp(*time),
+                        time::format(*timestamp),
                         "-status-".bright_green(),
                         line
                     )
