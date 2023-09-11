@@ -379,20 +379,15 @@ where
                     if let Ok(post) = post_stream {
                         let timestamp = post.header.timestamp;
                         let public_key = post.header.public_key;
-
-                        // Lookup the nick for the public key.
-                        let author = if let Some((nick, _)) =
-                            store.get_peer_name_and_hash(&public_key).await
-                        {
-                            nick
-                        } else {
-                            hex::to(&public_key[..4])
-                        };
+                        let nickname = store
+                            .get_peer_name_and_hash(&public_key)
+                            .await
+                            .map(|(nick, _hash)| nick);
 
                         if let PostBody::Text { channel, text } = post.body {
                             let mut ui = ui.lock().await;
                             if let Some(window) = ui.get_window(&address, &channel) {
-                                window.insert(timestamp, Some(author), &text);
+                                window.insert(timestamp, Some(public_key), nickname, &text);
                                 ui.update();
                             }
                         } else if let PostBody::Topic { channel, topic } = post.body {
@@ -434,24 +429,17 @@ where
 
                         while let Some(post_stream) = stream.next().await {
                             if let Ok(post) = post_stream {
-                                let public_key = post.header.public_key;
                                 let timestamp = post.header.timestamp;
-
-                                // Lookup the nick for the public key.
-                                let author = if let Some((nick, _)) =
-                                    store.get_peer_name_and_hash(&public_key).await
-                                {
-                                    nick
-                                } else {
-                                    // Default to the public key if no nick is
-                                    // available.
-                                    hex::to(&public_key[..4])
-                                };
+                                let public_key = post.header.public_key;
+                                let nickname = store
+                                    .get_peer_name_and_hash(&public_key)
+                                    .await
+                                    .map(|(nick, _hash)| nick);
 
                                 if let PostBody::Text { channel, text } = post.body {
                                     let mut ui = ui.lock().await;
                                     if let Some(window) = ui.get_window(&address, &channel) {
-                                        window.insert(timestamp, Some(author), &text);
+                                        window.insert(timestamp, Some(public_key), nickname, &text);
                                         ui.update();
                                     }
                                 } else if let PostBody::Topic { channel, topic } = post.body {

@@ -1,15 +1,17 @@
 use std::{collections::BTreeSet, io::Write};
 
 use async_std::sync::{Arc, Mutex};
-use cable::{Channel, Topic};
+use cable::{Channel, Nickname, Text, Timestamp, Topic};
+use owo_colors::OwoColorize;
 use signal_hook::{
     consts::SIGWINCH,
     iterator::{exfiltrator::WithOrigin, SignalsInfo},
 };
 
-use crate::{hex, input::Input, time};
+use crate::{hex, input::Input, time, utils};
 
 pub type Addr = Vec<u8>;
+pub type PublicKey = [u8; 32];
 pub type TermSize = (u32, u32);
 
 /// Determine the dimensions of the terminal.
@@ -41,8 +43,8 @@ pub struct Window {
     pub time_end: u64,
     /// The total number of posts which may be displayed.
     pub limit: usize,
-    /// The lines of the window (index, timestamp, author, text).
-    pub lines: BTreeSet<(u64, u64, Option<String>, String)>,
+    /// The lines of the window (index, timestamp, author, nickname, text).
+    pub lines: BTreeSet<(u64, Timestamp, Option<PublicKey>, Option<Nickname>, Text)>,
     /// A line index counter to facilitate line insertions.
     line_index: u64,
 }
@@ -63,7 +65,7 @@ impl Window {
 
     /// Write the message to the window.
     pub fn write(&mut self, msg: &str) {
-        self.insert(time::now().unwrap(), None, msg);
+        self.insert(time::now().unwrap(), None, None, msg);
     }
 
     /// Insert a new line into the window using the given message timestamp,
@@ -71,11 +73,17 @@ impl Window {
     ///
     /// The name will be the public key of the post author if a name-defining
     /// `post/info` is not available.
-    pub fn insert(&mut self, timestamp: u64, author: Option<String>, text: &str) {
+    pub fn insert(
+        &mut self,
+        timestamp: Timestamp,
+        author: Option<PublicKey>,
+        nick: Option<Nickname>,
+        text: &str,
+    ) {
         let index = self.line_index;
         self.line_index += 1;
         self.lines
-            .insert((index, timestamp, author, text.to_string()));
+            .insert((index, timestamp, author, nick, text.to_string()));
     }
 
     pub fn update_topic(&mut self, topic: String) {
@@ -187,11 +195,36 @@ impl Ui {
         let mut lines = window
             .lines
             .iter()
-            .map(|(_index, time, author, line)| {
-                if let Some(name_or_key) = author {
-                    format!("[{}] <{}> {}", time::timestamp(*time), name_or_key, line)
+            .map(|(_index, time, author, nickname, line)| {
+                if let Some(public_key) = author {
+                    let colour = utils::public_key_to_colour(public_key);
+
+                    // Display the nickname of the post author if one is known.
+                    if let Some(name) = nickname {
+                        format!(
+                            "[{}] <{}> {}",
+                            time::timestamp(*time),
+                            name.color(colour),
+                            line
+                        )
+                    } else {
+                        // Fallback to displaying the abbreviated public key of
+                        // the author if no nickname is known.
+                        let abbreviated_public_key = hex::to(&public_key[..4]);
+                        format!(
+                            "[{}] <{}> {}",
+                            time::timestamp(*time),
+                            abbreviated_public_key.color(colour),
+                            line
+                        )
+                    }
                 } else {
-                    format!("[{}] {} {}", time::timestamp(*time), "-status-", line)
+                    format!(
+                        "[{}] {} {}",
+                        time::timestamp(*time),
+                        "-status-".bright_green(),
+                        line
+                    )
                 }
             })
             .collect::<Vec<String>>();
@@ -216,7 +249,7 @@ impl Ui {
                     "[{}] {}\n{}\n> {}",
                     // Display the channel name (!status or other).
                     if window.channel == "!status" {
-                        window.channel.to_string()
+                        format!("{}", window.channel.bright_green())
                     } else {
                         format!("#{}", &window.channel)
                     },
