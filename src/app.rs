@@ -342,6 +342,7 @@ where
                 // If not, publish a `post/join` post.
                 if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                     if !cable.store.is_channel_member(channel, &public_key).await {
+                        // TODO: Match on validation error and display to user.
                         cable.post_join(channel).await?;
                     }
                 }
@@ -497,6 +498,7 @@ where
                         // If so, publish a `post/leave` post.
                         if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                             if cable.store.is_channel_member(channel, &public_key).await {
+                                // TODO: Match on validation error and display to user.
                                 cable.post_leave(channel).await?;
                             }
                         }
@@ -862,6 +864,7 @@ where
             ui.update();
         } else {
             let cable = self.cables.get_mut(&w.address).unwrap();
+            // TODO: Match on validation error and display to user.
             cable.post_text(&w.channel, msg).await?;
         }
         Ok(())
