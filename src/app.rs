@@ -122,13 +122,13 @@ where
             (Some("add"), Some(hex_addr)) => {
                 if let Some(addr) = hex::from(hex_addr) {
                     self.add_cable(&addr);
-                    self.write_status(&format!["added cabal: {}", hex_addr])
+                    self.write_status(&format!("added cabal: {}", hex_addr))
                         .await;
                     self.set_active_address(&addr).await;
-                    self.write_status(&format!["set active cabal to {}", hex_addr])
+                    self.write_status(&format!("set active cabal to {}", hex_addr))
                         .await;
                 } else {
-                    self.write_status(&format!["invalid cabal address: {}", hex_addr])
+                    self.write_status(&format!("invalid cabal address: {}", hex_addr))
                         .await;
                 }
             }
@@ -138,10 +138,10 @@ where
             (Some("set"), Some(s_addr)) => {
                 if let Some(addr) = hex::from(s_addr) {
                     self.set_active_address(&addr).await;
-                    self.write_status(&format!["set active cabal to {}", s_addr])
+                    self.write_status(&format!("set active cabal to {}", s_addr))
                         .await;
                 } else {
-                    self.write_status(&format!["invalid cabal address: {}", s_addr])
+                    self.write_status(&format!("invalid cabal address: {}", s_addr))
                         .await;
                 }
             }
@@ -156,7 +156,7 @@ where
                         .map(|x| &x == addr)
                         .unwrap_or(false);
                     let star = if is_active { "*" } else { "" };
-                    self.write_status(&format!["{}{}", hex::to(addr), star])
+                    self.write_status(&format!("{}{}", hex::to(addr), star))
                         .await;
                 }
                 if self.cables.is_empty() {
@@ -175,7 +175,7 @@ where
             let mut ui = self.ui.lock().await;
             if let Some(channels) = cable.store.get_channels().await {
                 for channel in channels {
-                    ui.write_status(&format!["- {}", channel]);
+                    ui.write_status(&format!("- {}", channel));
                 }
             } else {
                 ui.write_status("{ no known channels for the active cabal }");
@@ -183,11 +183,11 @@ where
             ui.update();
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot list channels with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
     }
@@ -219,7 +219,7 @@ where
                 {
                     // Update the UI.
                     let mut ui = ui.lock().await;
-                    ui.write_status(&format!["connected to {}", tcp_addr]);
+                    ui.write_status(&format!("connected to {}", tcp_addr));
                     ui.update();
                 }
 
@@ -243,8 +243,8 @@ where
         let mut ui = self.ui.lock().await;
         for connection in self.connections.iter() {
             ui.write_status(&match connection {
-                Connection::Connected(addr) => format!["connected to {}", addr],
-                Connection::Listening(addr) => format!["listening on {}", addr],
+                Connection::Connected(addr) => format!("connected to {}", addr),
+                Connection::Listening(addr) => format!("listening on {}", addr),
             });
         }
         if self.connections.is_empty() {
@@ -278,11 +278,11 @@ where
             }
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot delete nickname with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
         Ok(())
@@ -340,8 +340,7 @@ where
             if let Some(channel) = args.get(1) {
                 // Check if the local peer is already a member of this channel.
                 // If not, publish a `post/join` post.
-                if let Some(keypair) = cable.store.get_keypair().await {
-                    let public_key = keypair.0;
+                if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                     if !cable.store.is_channel_member(channel, &public_key).await {
                         cable.post_join(channel).await?;
                     }
@@ -362,7 +361,8 @@ where
 
                 ui.set_active_index(index);
                 ui.update();
-                let ui = self.ui.clone();
+                // The UI remains locked if not explicitly dropped here.
+                drop(ui);
 
                 // Define the channel options.
                 let opts = ChannelOptions {
@@ -373,40 +373,44 @@ where
                 };
 
                 let store = cable.store.clone();
+                let ui = self.ui.clone();
+                let mut ui = ui.lock().await;
 
-                let mut stored_posts_stream = cable.store.get_posts(&opts).await;
-                while let Some(post_stream) = stored_posts_stream.next().await {
-                    if let Ok(post) = post_stream {
-                        let timestamp = post.header.timestamp;
-                        let public_key = post.header.public_key;
-                        let nickname = store
-                            .get_peer_name_and_hash(&public_key)
-                            .await
-                            .map(|(nick, _hash)| nick);
-
-                        if let PostBody::Text { channel, text } = post.body {
-                            let mut ui = ui.lock().await;
-                            if let Some(window) = ui.get_window(&address, &channel) {
-                                window.insert(timestamp, Some(public_key), nickname, &text);
-                                ui.update();
-                            }
-                        } else if let PostBody::Topic { channel, topic } = post.body {
-                            let mut ui = ui.lock().await;
-                            if let Some(window) = ui.get_window(&address, &channel) {
-                                window.update_topic(topic);
-                                ui.update();
-                            }
-                        }
-                    }
-                }
-                drop(stored_posts_stream);
-
-                // Open the channel and update the UI with received text posts;
-                // only if this action has not been performed previously.
+                // Open the channel and update the UI with stored and received
+                // text posts; only if this action has not been performed
+                // previously.
                 //
                 // The window index is used as a proxy for "channel has been
                 // initialised".
                 if channel_window_index.is_none() {
+                    ui.write_status(&format!("joined channel {}", channel));
+                    ui.update();
+
+                    let mut stored_posts_stream = cable.store.get_posts(&opts).await;
+                    while let Some(post_stream) = stored_posts_stream.next().await {
+                        if let Ok(post) = post_stream {
+                            let timestamp = post.header.timestamp;
+                            let public_key = post.header.public_key;
+                            let nickname = store
+                                .get_peer_name_and_hash(&public_key)
+                                .await
+                                .map(|(nick, _hash)| nick);
+
+                            if let PostBody::Text { channel, text } = post.body {
+                                if let Some(window) = ui.get_window(&address, &channel) {
+                                    window.insert(timestamp, Some(public_key), nickname, &text);
+                                    ui.update();
+                                }
+                            } else if let PostBody::Topic { channel, topic } = post.body {
+                                if let Some(window) = ui.get_window(&address, &channel) {
+                                    window.update_topic(topic);
+                                    ui.update();
+                                }
+                            }
+                        }
+                    }
+                    drop(stored_posts_stream);
+
                     // Create an abort handle and add it to the local map.
                     //
                     // This allows the `display_posts` task to be aborted
@@ -420,6 +424,7 @@ where
 
                     let store = cable.store.clone();
 
+                    let ui = self.ui.clone();
                     let display_posts = async move {
                         let mut stream = cable
                             .open_channel(&opts)
@@ -462,11 +467,11 @@ where
             }
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot join channel with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
 
@@ -490,8 +495,7 @@ where
 
                         // Check if the local peer is a member of this channel.
                         // If so, publish a `post/leave` post.
-                        if let Some(keypair) = cable.store.get_keypair().await {
-                            let public_key = keypair.0;
+                        if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                             if cable.store.is_channel_member(channel, &public_key).await {
                                 cable.post_leave(channel).await?;
                             }
@@ -506,14 +510,15 @@ where
                         }
                         // Return to the home / status window.
                         ui.set_active_index(0);
+                        ui.write_status(&format!("left channel {}", channel));
                         ui.update();
                     }
                 } else {
                     let mut ui = self.ui.lock().await;
-                    ui.write_status(&format![
+                    ui.write_status(&format!(
                         "not currently a member of channel {}; no action taken",
                         channel
-                    ]);
+                    ));
                     ui.update();
                 }
             } else {
@@ -523,11 +528,11 @@ where
             }
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot leave channel with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
 
@@ -546,7 +551,7 @@ where
         } else if let Some(mut tcp_addr) = args.get(1).cloned() {
             // Format the TCP address if a host was not supplied.
             if !tcp_addr.contains(':') {
-                tcp_addr = format!["0.0.0.0:{}", tcp_addr];
+                tcp_addr = format!("0.0.0.0:{}", tcp_addr);
             }
 
             // Retrieve the active cable manager.
@@ -563,7 +568,7 @@ where
 
                 // Update the UI.
                 let mut ui = ui.lock().await;
-                ui.write_status(&format!["listening on {}", tcp_addr]);
+                ui.write_status(&format!("listening on {}", tcp_addr));
                 ui.update();
                 drop(ui);
 
@@ -611,11 +616,11 @@ where
                         if let Some((name, _hash)) =
                             cable.store.get_peer_name_and_hash(&member).await
                         {
-                            ui.write_status(&format!["  {}", name]);
+                            ui.write_status(&format!("  {}", name));
                         } else {
                             // Fall back to the public key (formatted as a
                             // hex string) if no nick is known.
-                            ui.write_status(&format!["  {}", hex::to(&member)]);
+                            ui.write_status(&format!("  {}", hex::to(&member)));
                         }
                     }
                 } else {
@@ -641,11 +646,11 @@ where
                             if let Some((name, _hash)) =
                                 cable.store.get_peer_name_and_hash(&member).await
                             {
-                                ui.write_status(&format!["  {}", name]);
+                                ui.write_status(&format!("  {}", name));
                             } else {
                                 // Fall back to the public key (formatted as a
                                 // hex string) if no nick is known.
-                                ui.write_status(&format!["  {}", hex::to(&member)]);
+                                ui.write_status(&format!("  {}", hex::to(&member)));
                             }
                         }
                     } else {
@@ -658,11 +663,11 @@ where
             };
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot list channel members with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
     }
@@ -675,7 +680,7 @@ where
             if let Some(nick) = args.get(1) {
                 let mut ui = self.ui.lock().await;
                 let _hash = cable.post_info_name(nick).await?;
-                ui.write_status(&format!["nickname set to {:?}", nick]);
+                ui.write_status(&format!("nickname set to {:?}", nick));
                 ui.update();
             } else {
                 let mut ui = self.ui.lock().await;
@@ -684,11 +689,11 @@ where
             }
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot assign nickname with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
 
@@ -707,10 +712,10 @@ where
                 let active_channel = ui.get_active_window().channel.to_owned();
                 if active_channel != "!status" {
                     cable.post_topic(&active_channel, &topic).await?;
-                    ui.write_status(&format![
+                    ui.write_status(&format!(
                         "topic set to {:?} for channel {:?}",
                         topic, active_channel
-                    ]);
+                    ));
                     ui.update();
                 } else {
                     ui.write_status("topic cannot be set for !status window");
@@ -733,16 +738,16 @@ where
         if let Some((_address, cable)) = self.get_active_cable().await {
             if let Some((public_key, _private_key)) = cable.store.get_keypair().await {
                 let mut ui = self.ui.lock().await;
-                ui.write_status(&format!["  {}", hex::to(&public_key)]);
+                ui.write_status(&format!("  {}", hex::to(&public_key)));
                 ui.update();
             }
         } else {
             let mut ui = self.ui.lock().await;
-            ui.write_status(&format![
+            ui.write_status(&format!(
                 "{}{}",
                 "cannot list the local public key with no active cabal set.",
                 " add a cabal with \"/cabal add\" first",
-            ]);
+            ));
             ui.update();
         }
     }
@@ -837,7 +842,7 @@ where
             x => {
                 if x.starts_with('/') {
                     self.write_status(line).await;
-                    self.write_status(&format!["no such command: {}", x]).await;
+                    self.write_status(&format!("no such command: {}", x)).await;
                 } else {
                     self.post(&line.trim_end().to_string()).await?;
                 }
