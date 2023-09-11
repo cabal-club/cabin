@@ -1,6 +1,6 @@
 # cabin
 
-A Rust(ic) Cabal client.
+A rustic Cabal client.
 
 Cabin is a command-line Cabal client written in Rust. It uses the [cable.rs](https://github.com/cabal-club/cable.rs) implementation of the new [Cable protocol](https://github.com/cabal-club/cable).
 
