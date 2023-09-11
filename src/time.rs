@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cable::Error;
-use time_format::TimeStamp;
+use chrono::{Local, LocalResult, TimeZone};
 
 /// Return the current system time in seconds since the Unix epoch.
 pub fn now() -> Result<u64, Error> {
@@ -25,7 +25,14 @@ pub fn two_weeks_ago() -> Result<u64, Error> {
     Ok(two_weeks_ago)
 }
 
-/// Format seconds since the Unix epoch as a timestamp with hour and minutes.
-pub fn timestamp(time: u64) -> String {
-    time_format::strftime_utc("%H:%M", time as TimeStamp).unwrap()
+/// Format the given timestamp (represented in milliseconds since the Unix
+/// epoch) as hour and minutes relative to the local timezone.
+pub fn format(timestamp: u64) -> String {
+    if let LocalResult::Single(date_time) = Local.timestamp_millis_opt(timestamp as i64) {
+        format!("{}", date_time.format("%H:%M"))
+    } else {
+        // Something is wrong with the timestamp; display a place-holder to
+        // avoid panicking on an unwrap.
+        String::from("XX:XX")
+    }
 }
