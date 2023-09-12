@@ -7,9 +7,8 @@ edition = "2021"
 ansi-diff = "1.0.0"
 argmap = "1.1.1"
 async-std = "1.10.0"
-cable = { path = "../cable.rs/cable" }
-# TODO: Use git path once high-activity dev cycle is complete.
-cable_core = { path = "../cable.rs/cable_core" }
+cable = { git = "https://github.com/cabal-club/cable.rs" }
+cable_core = { git = "https://github.com/cabal-club/cable.rs" }
 chrono = { version = "0.4.30", default_features = false, features = ["alloc", "std", "clock"] }
 env_logger = "0.9.0"
 futures = "0.3.13"
