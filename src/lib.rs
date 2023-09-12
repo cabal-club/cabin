@@ -1,4 +1,6 @@
-pub mod ui;
 pub mod app;
-pub mod input;
 mod hex;
+pub mod input;
+mod time;
+pub mod ui;
+mod utils;

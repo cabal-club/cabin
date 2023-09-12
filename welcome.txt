@@ -1,0 +1,25 @@
+                              (        )
+                             (      )
+                           (    )
+                             (    )
+                            (   )
+                              (  )
+                              (_)
+            __________________|_|_
+           /\       ______        \
+          //_\      \    /\        \
+         //___\      \__/  \        \
+        //_____\      \ |[]|         \
+       //_______\      \|__|          \
+      //_________\                     \
+     //<<<<<<<<<<<\_____________________\
+       |_||  |__|___[  ]__|_____[ ]____|
+       |_||o |__|___[__]__|_____[_]____|
+       | ||__|  |         |            |
+     wwww/   /wwwwwwwwwwwwwwwwwwwwwwwwwww
+
+welcome to cabin!
+we hope you enjoy your stay.
+
+type /help for a list of commands.
+for more info, visit https://cabal.chat/

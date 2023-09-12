@@ -1,32 +1,42 @@
-use async_std::{task,sync::{Arc,Mutex}};
-use cable::MemoryStore;
-use signal_hook::{iterator::{SignalsInfo,exfiltrator::WithOrigin},consts::signal::SIGWINCH};
+use std::{env, io};
+
+use async_std::task;
+use cable::Channel;
+use cable_core::MemoryStore;
+use futures::channel::mpsc;
 use raw_tty::IntoRawMode;
-use cabin::{ui::{TermSize,UI},app::App};
 
-type Error = Box<dyn std::error::Error+Send+Sync+'static>;
+use cabin::{app::App, ui};
 
-fn main() -> Result<(),Error> {
-  let (_args,_argv) = argmap::parse(std::env::args());
-  task::block_on(async move {
-    let mut app = App::new(get_size(), Box::new(|_name| {
-      Box::new(MemoryStore::default())
-    }));
-    let ui = app.ui.clone();
-    task::spawn(async move { resizer(ui).await });
+type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-    app.run(Box::new(std::io::stdin().into_raw_mode().unwrap())).await?;
-    Ok(())
-  })
-}
+fn main() -> Result<(), Error> {
+    // Initialise the logger.
+    env_logger::init();
 
-fn get_size() -> TermSize {
-  term_size::dimensions().map(|(w,h)| (w as u32, h as u32)).unwrap()
-}
+    // Parse the arguments.
+    let (_args, _argv) = argmap::parse(env::args());
 
-async fn resizer(ui: Arc<Mutex<UI>>) {
-  let mut signals = SignalsInfo::<WithOrigin>::new(&vec![SIGWINCH]).unwrap();
-  for info in &mut signals {
-    if info.signal == SIGWINCH { ui.lock().await.resize(get_size()) }
-  }
+    // Launch the application, resize the UI to match the terminal dimensions
+    // and accept input via stdin.
+    task::block_on(async move {
+        let (close_channel_sender, close_channel_receiver) = mpsc::unbounded::<Channel>();
+
+        let mut app = App::new(
+            ui::get_term_size(),
+            Box::new(|_name| Box::<MemoryStore>::default()),
+            close_channel_sender,
+        );
+
+        let ui = app.ui.clone();
+        task::spawn(async move { ui::resizer(ui).await });
+
+        app.run(
+            Box::new(io::stdin().into_raw_mode().unwrap()),
+            close_channel_receiver,
+        )
+        .await?;
+
+        Ok(())
+    })
 }

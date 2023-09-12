@@ -1,17 +1,20 @@
 [package]
 name = "cabin"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 
 [dependencies]
 ansi-diff = "1.0.0"
-async-std = "1.10.0"
-cable = { path = "../cable.rs" }
 argmap = "1.1.1"
-term_size = "0.3.2"
-signal-hook = { version = "0.3.13", features = [ "iterator", "extended-siginfo" ] }
-time-format = "1.1.2"
+async-std = "1.10.0"
+cable = { git = "https://github.com/cabal-club/cable.rs" }
+cable_core = { git = "https://github.com/cabal-club/cable.rs" }
+chrono = { version = "0.4.30", default_features = false, features = ["alloc", "std", "clock"] }
+env_logger = "0.9.0"
 futures = "0.3.13"
-indoc = "1.0.3"
+log = "0.4.0"
+owo-colors = "3.5.0"
 raw_tty = "0.1.0"
+signal-hook = { version = "0.3.13", features = [ "iterator", "extended-siginfo" ] }
+term_size = "0.3.2"
 terminal-keycode = "1.0.0"
