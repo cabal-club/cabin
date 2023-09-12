@@ -14,6 +14,11 @@ pub type Addr = Vec<u8>;
 pub type PublicKey = [u8; 32];
 pub type TermSize = (u32, u32);
 
+/// A `BTreeSet` representing the data for each line posted to the UI.
+/// Includes a line index, timestamp, optional public key, optional nickname
+/// and text.
+type LinesSet = BTreeSet<(u64, Timestamp, Option<PublicKey>, Option<Nickname>, Text)>;
+
 /// Determine the dimensions of the terminal.
 pub fn get_term_size() -> TermSize {
     term_size::dimensions()
@@ -44,7 +49,7 @@ pub struct Window {
     /// The total number of posts which may be displayed.
     pub limit: usize,
     /// The lines of the window (index, timestamp, author, nickname, text).
-    pub lines: BTreeSet<(u64, Timestamp, Option<PublicKey>, Option<Nickname>, Text)>,
+    pub lines: LinesSet,
     /// A line index counter to facilitate line insertions.
     line_index: u64,
 }
